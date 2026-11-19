@@ -28,6 +28,15 @@ body.idle { cursor: none; }
   touch-action: none;
 }
 
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-repeat: repeat;
+}
+
 /* Intro hint */
 .hint {
   position: fixed;
@@ -179,7 +188,7 @@ input[type="range"]::-moz-range-thumb {
 @media (max-width: 720px) {
   .controls { flex-wrap: wrap; gap: 10px; bottom: 12px; }
   .track { order: 3; flex-basis: 100%; }
-  .btn.toggle { margin-left: auto; }
+  #sceneBtn { margin-left: auto; }
   .volume { display: none; }
-  .file-btn span, .btn.toggle span { display: none; }
+  .file-btn span, .btn.toggle span, #sceneBtn span { display: none; }
 }

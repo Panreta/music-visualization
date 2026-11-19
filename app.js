@@ -15,11 +15,13 @@
   const hint = $('hint');
   const dropOverlay = $('dropOverlay');
   const barsBtn = $('barsBtn');
+  const sceneBtn = $('sceneBtn');
 
   // ---------- Canvas sizing ----------
   let W = 0, H = 0;
   function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Capped at 1.5x: the art is soft, so this looks the same and draws far fewer pixels
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     W = window.innerWidth;
     H = window.innerHeight;
     canvas.width = Math.round(W * dpr);
@@ -70,6 +72,7 @@
     playBtn.disabled = false;
     seek.disabled = false;
     hint.classList.add('gone');
+    pickRandomScene();
     play();
   }
 
@@ -156,6 +159,7 @@
     if (e.target === seek || e.target === volume) return;
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'b' || e.key === 'B') setBars(!showBars);
+    else if (e.key === 's' || e.key === 'S') nextScene();
     else if (e.key === 'f' || e.key === 'F') {
       if (document.fullscreenElement) document.exitFullscreen();
       else document.documentElement.requestFullscreen?.();
@@ -241,10 +245,17 @@
     if (live && b > 0.2 && b > bassAvg * 1.15 && t - lastBeat > 0.35) {
       lastBeat = t;
       swell = Math.min(1, swell + 0.5);
-      sparkleEdges(10 + Math.round(mood.level * 20));
-      spawnWave();
-      spawnPulse();
-      spawnPulse();
+      if (scene === 'glass') {
+        sparkleEdges(10 + Math.round(mood.level * 20));
+        spawnWave();
+        spawnPulse();
+        spawnPulse();
+      } else {
+        const sign = Math.random() < 0.5 ? -1 : 1;
+        addVortex(W * (0.15 + Math.random() * 0.7), H * (0.15 + Math.random() * 0.7),
+          sign * (1.5 + mood.level * 2.5), 120 + Math.random() * 120);
+        arrowFlash = 1;
+      }
     }
     swell = Math.max(0, swell - dt * 0.9);
 
@@ -271,8 +282,9 @@
     ctx.fillRect(0, 0, W, H);
   }
 
-  // Fine film grain breaks up gradient banding and adds texture
-  const grain = (() => {
+  // Fine film grain breaks up gradient banding and adds texture. It is a
+  // static CSS layer, so it costs nothing per frame.
+  (() => {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d');
@@ -283,17 +295,8 @@
       img.data[i + 3] = 255;
     }
     g.putImageData(img, 0, 0);
-    return ctx.createPattern(c, 'repeat');
+    $('grain').style.backgroundImage = `url(${c.toDataURL()})`;
   })();
-  function drawGrain() {
-    ctx.save();
-    ctx.globalAlpha = 0.035;
-    ctx.globalCompositeOperation = 'overlay';
-    ctx.translate((Math.random() * 128) | 0, (Math.random() * 128) | 0);
-    ctx.fillStyle = grain;
-    ctx.fillRect(-128, -128, W + 256, H + 256);
-    ctx.restore();
-  }
 
   // ---------- Geometry: stained-glass Voronoi ----------
   // Hundreds of seeds on a jittered grid drift slowly; every frame the screen
@@ -488,21 +491,22 @@
     }
     ctx.stroke();
 
-    // Lit walls glow, then fade out over about a second
+    // Lit walls glow, then fade out over about a second. The glow is a wide
+    // faint stroke under a thin bright one: shadowBlur looked similar but was far too slow.
     ctx.globalCompositeOperation = 'lighter';
     for (let n = 0; n < lit.length; n += 4) {
       const a = lit[n], b = lit[n + 1], g = lit[n + 2];
       const edgeHue = h + lit[n + 3] + 50;
-      ctx.lineWidth = 1.5 + g * 1.5;
-      ctx.strokeStyle = `hsla(${edgeHue}, 95%, 82%, ${g})`;
-      ctx.shadowColor = `hsla(${edgeHue}, 100%, 70%, ${g})`;
-      ctx.shadowBlur = 14 * g;
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
+      ctx.lineWidth = 3 + g * 7;
+      ctx.strokeStyle = `hsla(${edgeHue}, 100%, 70%, ${g * 0.22})`;
+      ctx.stroke();
+      ctx.lineWidth = 1.2 + g * 1.3;
+      ctx.strokeStyle = `hsla(${edgeHue}, 95%, 85%, ${g})`;
       ctx.stroke();
     }
-    ctx.shadowBlur = 0;
 
     for (const [key, g] of edgeGlow) {
       const next = g - dt * 0.9;
@@ -516,7 +520,7 @@
   // of cubic Bézier strands whose ends are swapped, so the strands twist
   // through each other like string art. Each ribbon follows one part of the
   // spectrum; light pulses travel along the strands with the music.
-  const STRANDS = 90;
+  const STRANDS = 40;
   const GROUPS = 6;   // strands are batched into a few paths for speed
   const ribbons = [
     { a: [-0.05, 0.15], b: [1.05, 0.8],  band: [0, 0.2],   hueOff: 0,   ph: 0.0, energy: 0 },
@@ -562,8 +566,9 @@
   function updateAndDrawRibbons(t, dt) {
     const live = analyser && !audio.paused;
     const h = hue + tone * 140;
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.lineCap = 'round';
+    // Plain blending for the strands: additive blending doubled their cost
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineCap = 'butt';
     ctx.lineWidth = 0.9;
 
     for (let r = 0; r < ribbons.length; r++) {
@@ -590,6 +595,8 @@
     }
 
     // Light pulses: a glowing head with a short fading tail
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
     for (let i = pulses.length - 1; i >= 0; i--) {
       const pl = pulses[i];
       pl.u += pl.speed * dt;
@@ -597,20 +604,175 @@
       const rb = ribbons[pl.r];
       const p = strandPoints(rb, pl.s, t);
       const ph = h + rb.hueOff + 40;
-      ctx.lineWidth = 2.2;
-      ctx.strokeStyle = `hsla(${ph}, 100%, 85%, 0.85)`;
-      ctx.shadowColor = `hsla(${ph}, 100%, 70%, 1)`;
-      ctx.shadowBlur = 12;
       ctx.beginPath();
       for (let n = 0; n <= 12; n++) {
         const [x, y] = bezierAt(p, Math.max(0, pl.u - n * 0.005));
         if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = `hsla(${ph}, 100%, 70%, 0.2)`;
+      ctx.stroke();
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = `hsla(${ph}, 100%, 85%, 0.85)`;
       ctx.stroke();
     }
-    ctx.shadowBlur = 0;
     ctx.globalCompositeOperation = 'source-over';
   }
+
+  // ---------- Scene: vector field ----------
+  // A smooth, slowly changing vector field covers the screen. A grid of arrows
+  // shows its direction, and thousands of particles stream along it, leaving
+  // fading trails that draw the flow lines. Beats drop swirling vortices into
+  // the field, clicks do too, and louder music makes everything flow faster.
+  const FLOW_PARTICLES = 1600;
+  const FLOW_GROUPS = 6;            // particles are batched by colour group for speed
+  const ARROW_STEP = 48;
+  const trail = document.createElement('canvas');   // persistent layer for the trails
+  const tctx = trail.getContext('2d');
+  const flowParts = [];
+  const vortices = [];
+  let arrowFlash = 0;
+
+  function resizeTrail() {
+    trail.width = Math.max(1, Math.round(W));   // trails are soft, so CSS-pixel resolution is plenty
+    trail.height = Math.max(1, Math.round(H));
+  }
+  window.addEventListener('resize', resizeTrail);
+  resizeTrail();
+
+  function resetFlowParticle(p) {
+    p.x = Math.random() * W;
+    p.y = Math.random() * H;
+    p.age = 0;
+    p.life = 2 + Math.random() * 4;
+  }
+  for (let i = 0; i < FLOW_PARTICLES; i++) {
+    const p = { g: i % FLOW_GROUPS, x: 0, y: 0, age: 0, life: 0 };
+    resetFlowParticle(p);
+    p.age = Math.random() * p.life;
+    flowParts.push(p);
+  }
+
+  function addVortex(x, y, strength, radius) {
+    vortices.push({ x, y, s: strength, r: radius, life: 1 });
+    if (vortices.length > 12) vortices.shift();
+  }
+
+  // Direction of the field at (x, y): layered waves that slowly evolve,
+  // bent by the bass, plus the swirl of every vortex
+  function fieldVec(x, y, t) {
+    const k = 0.0021;
+    const a = Math.sin(x * k + t * 0.11) * 1.8
+      + Math.cos(y * k * 1.3 - t * 0.09) * 1.6
+      + Math.sin((x + y) * k * 0.7 + t * 0.05 + mood.bass * 1.5) * 1.2;
+    let vx = Math.cos(a), vy = Math.sin(a);
+    for (const v of vortices) {
+      const dx = x - v.x, dy = y - v.y;
+      const d2 = dx * dx + dy * dy + 1;
+      const f = (v.s * v.life * v.r * v.r) / (d2 + v.r * v.r);
+      const d = Math.sqrt(d2);
+      vx += (-dy / d) * f + (dx / d) * f * 0.15;   // mostly swirl, a little outward push
+      vy += (dx / d) * f + (dy / d) * f * 0.15;
+    }
+    return [vx, vy];
+  }
+
+  function updateAndDrawFlow(t, dt) {
+    const live = analyser && !audio.paused;
+    const h = hue + tone * 140;
+
+    for (let i = vortices.length - 1; i >= 0; i--) {
+      vortices[i].life -= dt / 3.5;
+      if (vortices[i].life <= 0) vortices.splice(i, 1);
+    }
+    arrowFlash = Math.max(0, arrowFlash - dt * 1.5);
+
+    // Each colour group follows a slice of the spectrum
+    const groupEnergy = [];
+    for (let g = 0; g < FLOW_GROUPS; g++) {
+      const lo = Math.floor((g / FLOW_GROUPS) * BARS), hi = Math.floor(((g + 1) / FLOW_GROUPS) * BARS);
+      let sum = 0;
+      for (let i = lo; i < hi; i++) sum += bars[i];
+      groupEnergy.push(live ? sum / (hi - lo) : 0.05);
+    }
+
+    // Fade old trails, then draw this frame's particle steps on top
+    tctx.globalCompositeOperation = 'destination-out';
+    tctx.fillStyle = `rgba(0, 0, 0, ${Math.min(1, 0.07 * dt * 60)})`;
+    tctx.fillRect(0, 0, trail.width, trail.height);
+    tctx.globalCompositeOperation = 'lighter';
+    tctx.lineCap = 'round';
+    tctx.lineWidth = 1.3;
+
+    for (let g = 0; g < FLOW_GROUPS; g++) {
+      const e = groupEnergy[g];
+      const speed = (35 + mood.level * 140 + e * 120) * dt;
+      tctx.strokeStyle = `hsla(${h - 45 + g * 18}, 85%, ${62 + e * 20}%, ${0.35 + e * 0.6})`;
+      tctx.beginPath();
+      for (let i = g; i < FLOW_PARTICLES; i += FLOW_GROUPS) {
+        const p = flowParts[i];
+        const [vx, vy] = fieldVec(p.x, p.y, t);
+        const x0 = p.x, y0 = p.y;
+        p.x += vx * speed;
+        p.y += vy * speed;
+        p.age += dt;
+        if (p.age > p.life || p.x < -5 || p.x > W + 5 || p.y < -5 || p.y > H + 5) {
+          resetFlowParticle(p);
+          continue;
+        }
+        tctx.moveTo(x0, y0);
+        tctx.lineTo(p.x, p.y);
+      }
+      tctx.stroke();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(trail, 0, 0, W, H);
+
+    // Arrow grid showing the field's direction; flashes on beats
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = `hsla(${h + 30}, 60%, 88%, ${0.16 + mood.level * 0.2 + arrowFlash * 0.35})`;
+    ctx.beginPath();
+    const len = 9 + mood.level * 8 + arrowFlash * 6;
+    for (let y = ARROW_STEP / 2; y < H; y += ARROW_STEP) {
+      for (let x = ARROW_STEP / 2; x < W; x += ARROW_STEP) {
+        const [vx, vy] = fieldVec(x, y, t);
+        const m = Math.min(2.5, Math.hypot(vx, vy)) || 1;
+        const ux = vx / m, uy = vy / m;
+        const l = len * (0.6 + m * 0.4);
+        const tx = x + ux * l, ty = y + uy * l;
+        ctx.moveTo(x - ux * l, y - uy * l);
+        ctx.lineTo(tx, ty);
+        // Arrowhead
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - ux * 5 - uy * 3.5, ty - uy * 5 + ux * 3.5);
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - ux * 5 + uy * 3.5, ty - uy * 5 - ux * 3.5);
+      }
+    }
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- Scene selection ----------
+  // Each page load and each new song picks one of the two backgrounds at random
+  const SCENES = ['glass', 'flow'];
+  let scene = 'glass';
+  function setScene(name) {
+    scene = name;
+    if (name === 'flow') tctx.clearRect(0, 0, trail.width, trail.height);
+  }
+  function pickRandomScene() {
+    setScene(SCENES[(Math.random() * SCENES.length) | 0]);
+  }
+  pickRandomScene();
+
+  function nextScene() {
+    setScene(SCENES[(SCENES.indexOf(scene) + 1) % SCENES.length]);
+  }
+  sceneBtn.addEventListener('click', (e) => { nextScene(); e.currentTarget.blur(); });
 
   // ---------- Floating motes ----------
   const MOTES = 60;
@@ -713,14 +875,20 @@
     pointerDown = true;
     canvas.setPointerCapture(e.pointerId);
     addRipple(e.clientX, e.clientY);
-    // Push nearby Voronoi seeds away so the cells warp around the click
-    for (const s of sites) {
-      const dx = s.x - e.clientX, dy = s.y - e.clientY;
-      const d = Math.hypot(dx, dy) || 1;
-      if (d < 260) {
-        s.vx += (dx / d) * (260 - d) * 2;
-        s.vy += (dy / d) * (260 - d) * 2;
+    if (scene === 'glass') {
+      // Push nearby Voronoi seeds away so the cells warp around the click
+      for (const s of sites) {
+        const dx = s.x - e.clientX, dy = s.y - e.clientY;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d < 260) {
+          s.vx += (dx / d) * (260 - d) * 2;
+          s.vy += (dy / d) * (260 - d) * 2;
+        }
       }
+    } else {
+      // Drop a strong swirl into the vector field where you clicked
+      addVortex(e.clientX, e.clientY, (Math.random() < 0.5 ? -1 : 1) * 4, 160);
+      arrowFlash = 1;
     }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
@@ -801,12 +969,15 @@
 
     analyse(t, dt);
     drawField();
-    updateAndDrawVoronoi(t, dt);
-    updateAndDrawRibbons(t, dt);
+    if (scene === 'glass') {
+      updateAndDrawVoronoi(t, dt);
+      updateAndDrawRibbons(t, dt);
+    } else {
+      updateAndDrawFlow(t, dt);
+    }
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
     updateAndDrawRipples(dt);
-    drawGrain();
 
     if (!seeking && isFinite(audio.duration) && audio.duration > 0) {
       seek.value = Math.round((audio.currentTime / audio.duration) * 1000);
