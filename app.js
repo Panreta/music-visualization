@@ -18,12 +18,6 @@
   const barsBtn = $('barsBtn');
 
   // ---------- Canvas sizing ----------
-  // The colour field is painted on a tiny offscreen canvas and stretched to
-  // full screen: the upscale blurs it into smooth, dreamy gradients for free.
-  const FIELD_SCALE = 10;
-  const field = document.createElement('canvas');
-  const fctx = field.getContext('2d');
-
   let W = 0, H = 0;
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -34,8 +28,6 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    field.width = Math.max(16, Math.ceil(W / FIELD_SCALE));
-    field.height = Math.max(16, Math.ceil(H / FIELD_SCALE));
   }
   window.addEventListener('resize', resize);
   resize();
@@ -204,12 +196,13 @@
     return sum / ((hi - lo + 1) * 255);
   }
 
-  // `mood` follows the music slowly; it is what drives the colour field
+  // `mood` follows the music slowly; it is what drives the screen colour
   const mood = { bass: 0, mid: 0, treble: 0, level: 0 };
   let bassAvg = 0;
   let lastBeat = 0;
   let swell = 0;      // gentle brightness lift on strong beats
   let hue = 220;      // starts in calm blue/indigo
+  let tone = 0.3;     // 0 = deep/bassy, 1 = bright/airy
 
   const follow = (cur, target, up, down, dt) => cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dt));
 
@@ -248,63 +241,25 @@
     }
     swell = Math.max(0, swell - dt * 0.9);
 
-    // Slow colour drift; fuller music turns the wheel a little faster
-    hue += dt * (1.5 + mood.level * 10);
+    // Bright, treble-heavy sound pulls the colour one way, deep bassy sound the other
+    const tilt = live ? tr / (b + tr + 0.01) : 0.3;
+    tone = follow(tone, tilt, 0.6, 0.6, dt);
+
+    // Slow colour drift; fuller music turns the wheel faster
+    hue += dt * (2 + mood.level * 25);
   }
 
   // ---------- Colour field ----------
-  // Each cloud listens to its own slice of the spectrum, so different parts of
-  // the screen glow with different parts of the music.
-  const clouds = [
-    { band: [0, 0.2],   hueOff: 0,   size: 0.75, sx: 0.031, sy: 0.023, ph: 0.0 },
-    { band: [0.15, 0.4], hueOff: 35,  size: 0.6,  sx: 0.022, sy: 0.037, ph: 1.7 },
-    { band: [0.3, 0.55], hueOff: -30, size: 0.55, sx: 0.041, sy: 0.019, ph: 3.1 },
-    { band: [0.5, 0.75], hueOff: 60,  size: 0.5,  sx: 0.027, sy: 0.033, ph: 4.4 },
-    { band: [0.7, 1],   hueOff: -55, size: 0.45, sx: 0.036, sy: 0.028, ph: 5.6 },
-    { band: [0, 0.35],  hueOff: 15,  size: 0.65, sx: 0.018, sy: 0.026, ph: 2.4 },
-  ];
-  for (const c of clouds) c.energy = 0;
-
-  function drawField(t, dt) {
-    const fw = field.width, fh = field.height;
-    const span = Math.max(fw, fh);
-
-    // Deep base tone, gently brighter when the music is fuller
-    fctx.globalCompositeOperation = 'source-over';
-    fctx.fillStyle = `hsl(${hue + 10}, 45%, ${7 + mood.level * 7 + swell * 2}%)`;
-    fctx.fillRect(0, 0, fw, fh);
-
-    fctx.globalCompositeOperation = 'screen';
-    for (const c of clouds) {
-      const lo = Math.floor(c.band[0] * BARS), hi = Math.max(lo + 1, Math.floor(c.band[1] * BARS));
-      let sum = 0;
-      for (let i = lo; i < hi; i++) sum += bars[i];
-      c.energy = follow(c.energy, sum / (hi - lo), 2, 0.6, dt);
-
-      const x = fw * (0.5 + 0.42 * Math.sin(t * c.sx + c.ph));
-      const y = fh * (0.5 + 0.42 * Math.cos(t * c.sy + c.ph * 1.3));
-      const r = span * c.size * (0.85 + c.energy * 0.6 + mood.bass * 0.2);
-      const h = hue + c.hueOff + c.energy * 25;
-      const a = 0.34 + c.energy * 0.55 + swell * 0.1;
-
-      const g = fctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, `hsla(${h}, 65%, ${45 + c.energy * 15}%, ${a})`);
-      g.addColorStop(0.45, `hsla(${h + 10}, 60%, 35%, ${a * 0.45})`);
-      g.addColorStop(1, `hsla(${h + 20}, 60%, 25%, 0)`);
-      fctx.fillStyle = g;
-      fctx.fillRect(0, 0, fw, fh);
-    }
-
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(field, 0, 0, W, H);
-  }
-
-  // Soft dark edges keep the eye in the middle
-  function drawVignette() {
-    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.6);
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,0.45)');
+  // The whole screen is one colour wash: the music sets its hue, saturation
+  // and brightness. A slight top-to-bottom shade keeps it from looking flat.
+  function drawField() {
+    const h = hue + tone * 140;
+    const sat = 40 + mood.level * 30;
+    const light = 8 + mood.level * 30 + swell * 5;
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, `hsl(${h - 8}, ${sat}%, ${light + 3}%)`);
+    g.addColorStop(1, `hsl(${h + 12}, ${sat}%, ${Math.max(4, light - 6)}%)`);
+    ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
@@ -509,11 +464,10 @@
     const t = now / 1000;
 
     analyse(t, dt);
-    drawField(t, dt);
+    drawField();
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
     updateAndDrawRipples(dt);
-    drawVignette();
     drawGrain();
 
     if (!seeking && isFinite(audio.duration) && audio.duration > 0) {
