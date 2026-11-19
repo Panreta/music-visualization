@@ -13,7 +13,8 @@ python3 -m http.server 8000
 
 ## Use
 
-- **Load music:** press **Choose MP3**, or drag an audio file onto the page.
+- **Load music:** press **Choose MP3**, or drag audio files onto the page (you can pick or drop several at once).
+- **Library:** every song you load is saved in your browser (IndexedDB), so it is still there next time you open the page. Press **Library** (or L) to see the list with each song's length and play count; click a song to play it, or the × to remove it. When a song ends, the next one in the library plays. Nothing is uploaded: the library lives only in the browser you used.
 - **Ripples:** click anywhere on the screen; drag to leave a trail of ripples.
 There are five backgrounds (scenes):
 
@@ -74,6 +75,7 @@ Click a cell to light it (or click a lit one to turn it off), and drag to light 
 | S     | Switch background  |
 | M     | New random equation / rule (Brownian and Life scenes) |
 | B     | Show / hide bars   |
+| L     | Show / hide the library |
 | F     | Toggle fullscreen  |
 
 The control bar hides after 3 seconds of no mouse movement while music plays; move the mouse to bring it back.
@@ -92,6 +94,7 @@ The control bar hides after 3 seconds of no mouse movement while music plays; mo
 | S     | Switch background  |
 | M     | New random equation / rule (Brownian and Life scenes) |
 | B     | Show / hide bars   |
+| L     | Show / hide the library |
 | F     | Toggle fullscreen  |
 
 The control bar hides after 3 seconds of no mouse movement while music plays; move the mouse to bring it back.

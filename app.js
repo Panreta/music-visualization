@@ -16,6 +16,7 @@
   const dropOverlay = $('dropOverlay');
   const barsBtn = $('barsBtn');
   const sceneBtn = $('sceneBtn');
+  const libBtn = $('libBtn');
 
   // ---------- Canvas sizing ----------
   let W = 0, H = 0;
@@ -59,16 +60,36 @@
     return file && (file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name));
   }
 
-  function loadFile(file) {
-    if (!isAudioFile(file)) {
+  // Every file you load is saved to the library; the first one starts playing
+  async function loadFiles(files) {
+    const audioFiles = [...files].filter(isAudioFile);
+    if (!audioFiles.length) {
       trackName.textContent = 'That file is not audio — try an MP3';
       return;
     }
+    // Start playing right away (browsers only allow audio from a user action),
+    // then save in the background
+    playBlob(audioFiles[0], audioFiles[0].name, null);
+    let firstId = null;
+    for (const f of audioFiles) {
+      const id = await librarySave(f);
+      if (firstId === null) firstId = id;
+    }
+    if (firstId !== null) {
+      currentSongId = firstId;
+      await libraryMarkPlayed(firstId);
+    }
+    await renderLibrary();
+    rememberDuration();
+  }
+
+  function playBlob(blob, name, id) {
     initAudio();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
-    objectUrl = URL.createObjectURL(file);
+    objectUrl = URL.createObjectURL(blob);
     audio.src = objectUrl;
-    trackName.textContent = file.name.replace(/\.[^.]+$/, '');
+    currentSongId = id;
+    trackName.textContent = name.replace(/\.[^.]+$/, '');
     playBtn.disabled = false;
     seek.disabled = false;
     hint.classList.add('gone');
@@ -118,7 +139,7 @@
   audio.addEventListener('loadedmetadata', () => { durTime.textContent = fmt(audio.duration); });
 
   fileInput.addEventListener('change', () => {
-    loadFile(fileInput.files[0]);
+    loadFiles(fileInput.files);
     fileInput.value = '';
   });
   playBtn.addEventListener('click', (e) => { togglePlay(); e.currentTarget.blur(); });
@@ -143,8 +164,140 @@
     e.preventDefault();
     dragDepth = 0;
     dropOverlay.classList.remove('show');
-    if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
   });
+
+  // ---------- Song library ----------
+  // Songs are kept in IndexedDB, so they stay in this browser across visits.
+  // Nothing is uploaded anywhere; each browser has its own library.
+  const library = $('library');
+  const libList = $('libList');
+  const libCount = $('libCount');
+  const libEmpty = $('libEmpty');
+  let currentSongId = null;
+  let songs = [];   // metadata only, oldest first; the audio stays in the database
+
+  const dbReady = new Promise((resolve) => {
+    try {
+      const req = indexedDB.open('music-visualizer', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('songs', { keyPath: 'id', autoIncrement: true });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+  // Ask the browser not to clear the library when space runs low
+  navigator.storage?.persist?.().catch(() => {});
+
+  function dbRun(mode, fn) {
+    return dbReady.then((db) => new Promise((resolve, reject) => {
+      if (!db) return resolve(null);
+      const tx = db.transaction('songs', mode);
+      const req = fn(tx.objectStore('songs'));
+      tx.oncomplete = () => resolve(req && req.result);
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    })).catch((err) => { console.warn('Library error:', err); return null; });
+  }
+
+  async function refreshSongs() {
+    const all = (await dbRun('readonly', (s) => s.getAll())) || [];
+    // Keep only metadata in memory
+    songs = all.map(({ blob, ...meta }) => meta);
+  }
+
+  // Save a file unless the same one (name and size) is already there
+  async function librarySave(file) {
+    await refreshSongs();
+    const dup = songs.find((s) => s.name === file.name && s.size === file.size);
+    if (dup) return dup.id;
+    return dbRun('readwrite', (s) => s.add({
+      name: file.name, size: file.size, blob: file, added: Date.now(), plays: 0, lastPlayed: 0, duration: 0,
+    }));
+  }
+
+  async function libraryUpdate(id, fn) {
+    await dbRun('readwrite', (s) => {
+      const req = s.get(id);
+      req.onsuccess = () => { if (req.result) { fn(req.result); s.put(req.result); } };
+      return req;
+    });
+  }
+  function libraryMarkPlayed(id) {
+    return libraryUpdate(id, (r) => { r.plays++; r.lastPlayed = Date.now(); });
+  }
+
+  async function playSong(id) {
+    const rec = await dbRun('readonly', (s) => s.get(id));
+    if (!rec) return;
+    playBlob(rec.blob, rec.name, id);
+    await libraryMarkPlayed(id);
+    renderLibrary();
+  }
+
+  async function deleteSong(id) {
+    await dbRun('readwrite', (s) => s.delete(id));
+    renderLibrary();
+  }
+
+  function playNextSong() {
+    const i = songs.findIndex((s) => s.id === currentSongId);
+    if (i >= 0 && i + 1 < songs.length) playSong(songs[i + 1].id);
+  }
+
+  // Remember each song's length once it is known, for the list
+  function rememberDuration() {
+    const id = currentSongId, d = audio.duration;
+    const s = songs.find((x) => x.id === id);
+    if (s && isFinite(d) && !s.duration) {
+      s.duration = d;
+      libraryUpdate(id, (r) => { r.duration = d; });
+      renderLibrary(false);
+    }
+  }
+  audio.addEventListener('loadedmetadata', rememberDuration);
+  // When a song ends, go on to the next one in the library
+  audio.addEventListener('ended', playNextSong);
+
+  async function renderLibrary(reload = true) {
+    if (reload) await refreshSongs();
+    libCount.textContent = songs.length === 1 ? '1 song' : `${songs.length} songs`;
+    libEmpty.hidden = songs.length > 0;
+    libList.replaceChildren(...songs.map((s) => {
+      const li = document.createElement('li');
+      li.className = 'lib-item' + (s.id === currentSongId ? ' current' : '');
+      const play = document.createElement('button');
+      play.className = 'lib-play';
+      play.title = 'Play';
+      const name = document.createElement('span');
+      name.className = 'lib-name';
+      name.textContent = s.name.replace(/\.[^.]+$/, '');
+      const meta = document.createElement('span');
+      meta.className = 'lib-meta';
+      meta.textContent = [s.duration ? fmt(s.duration) : '', s.plays === 1 ? '1 play' : `${s.plays} plays`]
+        .filter(Boolean).join(' · ');
+      play.append(name, meta);
+      play.addEventListener('click', () => { playSong(s.id); play.blur(); });
+      const del = document.createElement('button');
+      del.className = 'lib-del';
+      del.title = 'Remove from library';
+      del.setAttribute('aria-label', `Remove ${name.textContent} from library`);
+      del.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>';
+      del.addEventListener('click', () => {
+        if (confirm(`Remove "${name.textContent}" from the library?`)) deleteSong(s.id);
+      });
+      li.append(play, del);
+      return li;
+    }));
+  }
+
+  function setLibraryOpen(open) {
+    library.hidden = !open;
+    libBtn.classList.toggle('active', open);
+    libBtn.setAttribute('aria-pressed', String(open));
+  }
+  libBtn.addEventListener('click', (e) => { setLibraryOpen(library.hidden); e.currentTarget.blur(); });
+  renderLibrary();
 
   // ---------- Bars toggle ----------
   let showBars = true;
@@ -159,6 +312,7 @@
     if (e.target === seek || e.target === volume) return;
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'b' || e.key === 'B') setBars(!showBars);
+    else if (e.key === 'l' || e.key === 'L') setLibraryOpen(library.hidden);
     else if (e.key === 's' || e.key === 'S') nextScene();
     else if (e.key === 'm' || e.key === 'M') refreshModel();
     else if (e.key === 'f' || e.key === 'F') {
