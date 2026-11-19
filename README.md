@@ -15,19 +15,23 @@ python3 -m http.server 8000
 
 - **Load music:** press **Choose MP3**, or drag an audio file onto the page.
 - **Ripples:** click anywhere on the screen; drag to leave a trail of ripples.
-There are two backgrounds (scenes):
+There are three backgrounds (scenes):
 
 **Scene 1: stained glass**
 
 - **Stained-glass Voronoi:** about 300 seed points on a jittered grid drift slowly, and every frame the screen is split into the cells closest to each one. Each cell is filled like a pane of stained glass, with dark lead lines between them, and neighbouring panes share similar colours so hues sweep across the screen. Panes near the centre follow the bass and panes near the edges follow the treble. Strong beats send waves of light through the glass, and random lead lines glow with the music. A click pushes nearby seeds away so the panes warp, and its ripple lights the glass it passes.
 - **Bézier silk:** four ribbons cross the screen in different directions. Each is a bundle of 90 cubic Bézier strands whose ends are swapped, so they twist through each other like string art. Each ribbon follows one part of the spectrum, and light pulses travel along the strands.
-- **Scene:** each page load and each new song randomly picks one of two backgrounds; press **Scene** to switch.
+- **Scene:** each page load and each new song randomly picks one of three backgrounds; press **Scene** to switch.
 
 **Scene 2: vector field**
 
 - A smooth, slowly changing vector field covers the screen, with a grid of arrows showing its direction. About 1,600 particles stream along it and leave fading trails that draw the flow lines. Each colour group of particles follows one part of the spectrum, and louder music makes everything flow faster. Strong beats drop swirling vortices into the field and flash the arrows; a click drops a strong swirl where you clicked.
 
-**On top of both:**
+**Scene 3: fireflies and star dust**
+
+- Only particles: about 1,400 specks of star dust turn slowly around the centre, with nearer stars brighter and faster. Treble makes them twinkle and bass makes them pulse. Seventy fireflies drift on curving paths and blink, each glowing with its own part of the spectrum. Strong beats make groups of fireflies flash together and sometimes send a shooting star across the sky. A click lights up nearby fireflies and scatters them, and its ripple pushes the stars aside.
+
+**On top of every scene:**
 
 - **Bars:** show or hide the bar graph with the **Bars** button.
 
@@ -45,7 +49,7 @@ The control bar hides after 3 seconds of no mouse movement while music plays; mo
 `app.js` sends the audio through the Web Audio API `AnalyserNode` and reads the frequency data every frame. It splits the spectrum into 48 log-spaced bands and smooths everything heavily so the picture drifts instead of flickering.
 
 - **Screen colour:** the whole screen is one colour wash. Louder music makes it brighter and richer. Bassy sound pulls the colour one way and bright, airy sound pulls it the other, while the base colour slowly turns around the colour wheel, faster when the music is fuller. Strong beats lift the brightness gently.
-- **Scene:** each page load and each new song randomly picks one of two backgrounds; press **Scene** to switch.
+- **Scene:** each page load and each new song randomly picks one of three backgrounds; press **Scene** to switch.
 - **Bars:** show or hide the bar graph with the **Bars** button.
 
 | Key   | Action             |
@@ -65,4 +69,4 @@ The control bar hides after 3 seconds of no mouse movement while music plays; mo
 - **Mood:** the base colour turns slowly around the colour wheel, a little faster when the music is fuller. The whole screen brightens with loudness and lifts gently on strong beats.
 - **Bars:** soft, translucent bars mirrored from the centre, with bass in the middle.
 - **Texture:** faint floating motes and fine film grain (a static CSS layer).
-- **Ripples:** click or drag to send out rings that push the motes aside, warp the glass, or swirl the vector field. They grow larger when the music is louder.
+- **Ripples:** click or drag to send out rings that push the motes aside, warp the glass, swirl the vector field, or scatter the fireflies. They grow larger when the music is louder.

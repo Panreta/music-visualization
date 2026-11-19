@@ -250,11 +250,14 @@
         spawnWave();
         spawnPulse();
         spawnPulse();
-      } else {
+      } else if (scene === 'flow') {
         const sign = Math.random() < 0.5 ? -1 : 1;
         addVortex(W * (0.15 + Math.random() * 0.7), H * (0.15 + Math.random() * 0.7),
           sign * (1.5 + mood.level * 2.5), 120 + Math.random() * 120);
         arrowFlash = 1;
+      } else {
+        flashFireflies(0.35 + mood.level * 0.3);
+        if (Math.random() < 0.5) spawnShootingStar();
       }
     }
     swell = Math.max(0, swell - dt * 0.9);
@@ -756,9 +759,191 @@
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // ---------- Scene: fireflies and star dust ----------
+  // Only particles: a slowly turning sky of twinkling star dust with fireflies
+  // drifting through it. Treble makes the stars twinkle, bass makes them
+  // pulse, each firefly glows with its own part of the spectrum, and beats
+  // make groups of fireflies flash together and send shooting stars across.
+  const STARS = 1400;
+  const FIREFLIES = 70;
+  const FIREFLY_TINTS = [40, 75, 110];   // hue offsets from the screen colour
+  const stars = [];
+  const fireflies = [];
+  const shooting = [];
+  let starSpin = 0;
+
+  // Glows are pre-drawn sprites stamped with drawImage, which is far cheaper
+  // than shadowBlur. They are re-tinted only when the colour has drifted.
+  function makeGlowSprite(h) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, `hsla(${h}, 100%, 92%, 1)`);
+    grad.addColorStop(0.18, `hsla(${h}, 100%, 70%, 0.8)`);
+    grad.addColorStop(0.5, `hsla(${h}, 100%, 55%, 0.18)`);
+    grad.addColorStop(1, `hsla(${h}, 100%, 50%, 0)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    return c;
+  }
+  let sprites = [];
+  let spriteHue = null;
+  function refreshSprites(h) {
+    if (spriteHue !== null && Math.abs(h - spriteHue) < 4) return;
+    spriteHue = h;
+    sprites = FIREFLY_TINTS.map((o) => makeGlowSprite(h + o));
+  }
+
+  function layoutDust() {
+    stars.length = 0;
+    const R = Math.hypot(W, H) / 2;
+    for (let i = 0; i < STARS; i++) {
+      const depth = Math.random() ** 2;   // most stars are far away and faint
+      stars.push({
+        r: Math.sqrt(Math.random()) * R,  // even spread over the area
+        a: Math.random() * Math.PI * 2,
+        depth,
+        size: 0.6 + depth * 1.8,
+        tw: 0.8 + Math.random() * 2.5,
+        ph: Math.random() * Math.PI * 2,
+        ox: 0, oy: 0, vx: 0, vy: 0, x: 0, y: 0,
+      });
+    }
+    fireflies.length = 0;
+    for (let i = 0; i < FIREFLIES; i++) {
+      fireflies.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vx: 0, vy: 0,
+        ph: Math.random() * 100,
+        blinkRate: 0.6 + Math.random() * 1.2,
+        blinkPh: Math.random() * Math.PI * 2,
+        size: 26 + Math.random() * 34,
+        tint: i % FIREFLY_TINTS.length,
+        band: Math.random(),
+        flash: 0,
+        glow: 0,
+      });
+    }
+  }
+  window.addEventListener('resize', layoutDust);
+  layoutDust();
+
+  function flashFireflies(fraction) {
+    for (const f of fireflies) if (Math.random() < fraction) f.flash = 1;
+  }
+
+  function spawnShootingStar() {
+    const fromLeft = Math.random() < 0.5;
+    const ang = (fromLeft ? 0.35 : Math.PI - 0.35) + (Math.random() - 0.5) * 0.4;
+    const sp = 700 + Math.random() * 500;
+    shooting.push({
+      x: fromLeft ? Math.random() * W * 0.5 : W * (0.5 + Math.random() * 0.5),
+      y: Math.random() * H * 0.4,
+      vx: Math.cos(ang) * sp,
+      vy: Math.sin(ang) * sp,
+      life: 1,
+    });
+  }
+
+  function updateAndDrawDust(t, dt) {
+    const live = analyser && !audio.paused;
+    const h = hue + tone * 140;
+    refreshSprites(Math.round(h));
+
+    // Darken the colour wash into a night sky so the lights stand out
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Star dust turns slowly around the centre; near stars turn faster
+    starSpin += dt * (0.008 + mood.level * 0.04);
+    const cx = W / 2, cy = H / 2;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `hsl(${h + 30}, 40%, 90%)`;
+    for (const s of stars) {
+      // Ripple wavefronts push stars aside; they drift back afterwards
+      for (const r of ripples) {
+        if (r.p <= 0) continue;
+        const dx = s.x - r.x, dy = s.y - r.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (Math.abs(d - r.radius) < 30) {
+          const push = (1 - r.p) * r.alpha * 1500 * dt;
+          s.vx += (dx / d) * push;
+          s.vy += (dy / d) * push;
+        }
+      }
+      s.vx *= Math.exp(-2 * dt);
+      s.vy *= Math.exp(-2 * dt);
+      s.ox = (s.ox + s.vx * dt) * Math.exp(-0.8 * dt);
+      s.oy = (s.oy + s.vy * dt) * Math.exp(-0.8 * dt);
+      const a = s.a + starSpin * (0.4 + s.depth);
+      s.x = cx + Math.cos(a) * s.r + s.ox;
+      s.y = cy + Math.sin(a) * s.r + s.oy;
+      if (s.x < -4 || s.x > W + 4 || s.y < -4 || s.y > H + 4) continue;
+
+      const tw = 0.55 + 0.45 * Math.sin(t * s.tw * (1 + mood.treble * 3) + s.ph);
+      const alpha = Math.min(1, (0.25 + s.depth * 0.6) * tw * (0.8 + mood.treble * 1.2));
+      const size = s.size * (1 + mood.bass * 0.8 * s.depth);
+      ctx.globalAlpha = alpha;
+      ctx.fillRect(s.x - size / 2, s.y - size / 2, size, size);
+      // The nearest stars get a small halo
+      if (s.depth > 0.9) {
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.drawImage(sprites[0], s.x - 6, s.y - 6, 12, 12);
+      }
+    }
+
+    // Fireflies wander on smooth, curving paths and blink
+    for (const f of fireflies) {
+      const dir = Math.sin(t * 0.3 + f.ph) * 2.2 + Math.cos(t * 0.17 + f.ph * 1.7) * 1.6;
+      const sp = 18 + mood.level * 40;
+      const k = 1 - Math.exp(-1.5 * dt);
+      f.vx += (Math.cos(dir) * sp - f.vx) * k;
+      f.vy += (Math.sin(dir) * sp - f.vy) * k;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      if (f.x < -40) f.x = W + 40; else if (f.x > W + 40) f.x = -40;
+      if (f.y < -40) f.y = H + 40; else if (f.y > H + 40) f.y = -40;
+
+      const e = live ? bars[Math.min(BARS - 1, (f.band * BARS) | 0)] : 0;
+      const blink = Math.pow(Math.max(0, Math.sin(t * f.blinkRate + f.blinkPh)), 3);
+      f.flash = Math.max(0, f.flash - dt * 1.2);
+      f.glow = follow(f.glow, Math.min(1, blink * 0.6 + e * 1.2 + f.flash), 8, 3, dt);
+      if (f.glow < 0.02) continue;
+
+      const size = f.size * (0.7 + f.glow * 0.6);
+      ctx.globalAlpha = f.glow;
+      ctx.drawImage(sprites[f.tint], f.x - size / 2, f.y - size / 2, size, size);
+    }
+    ctx.globalAlpha = 1;
+
+    // Shooting stars: a bright head with a fading tail
+    ctx.lineCap = 'round';
+    for (let i = shooting.length - 1; i >= 0; i--) {
+      const s = shooting[i];
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.life -= dt * 1.1;
+      if (s.life <= 0) { shooting.splice(i, 1); continue; }
+      const tx = s.x - s.vx * 0.12, ty = s.y - s.vy * 0.12;
+      const g = ctx.createLinearGradient(s.x, s.y, tx, ty);
+      g.addColorStop(0, `hsla(${h + 40}, 100%, 92%, ${s.life})`);
+      g.addColorStop(1, `hsla(${h + 40}, 100%, 70%, 0)`);
+      ctx.strokeStyle = g;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
   // ---------- Scene selection ----------
-  // Each page load and each new song picks one of the two backgrounds at random
-  const SCENES = ['glass', 'flow'];
+  // Each page load and each new song picks one of the backgrounds at random
+  const SCENES = ['glass', 'flow', 'dust'];
   let scene = 'glass';
   function setScene(name) {
     scene = name;
@@ -885,10 +1070,21 @@
           s.vy += (dy / d) * (260 - d) * 2;
         }
       }
-    } else {
+    } else if (scene === 'flow') {
       // Drop a strong swirl into the vector field where you clicked
       addVortex(e.clientX, e.clientY, (Math.random() < 0.5 ? -1 : 1) * 4, 160);
       arrowFlash = 1;
+    } else {
+      // Nearby fireflies light up and scatter
+      for (const f of fireflies) {
+        const dx = f.x - e.clientX, dy = f.y - e.clientY;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d < 220) {
+          f.flash = 1;
+          f.vx += (dx / d) * 120;
+          f.vy += (dy / d) * 120;
+        }
+      }
     }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
@@ -972,8 +1168,10 @@
     if (scene === 'glass') {
       updateAndDrawVoronoi(t, dt);
       updateAndDrawRibbons(t, dt);
-    } else {
+    } else if (scene === 'flow') {
       updateAndDrawFlow(t, dt);
+    } else {
+      updateAndDrawDust(t, dt);
     }
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
