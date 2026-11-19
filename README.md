@@ -47,20 +47,20 @@ The music sets the temperature (the noise strength σ), beats kick it up, bass a
 
 **Scene 5: Game of Life**
 
-A life-like cellular automaton on a grid that wraps around the edges. It starts from a small 7×7 seed in the centre of an otherwise empty screen and grows and evolves from there (the seed is the best of a dozen random tries, tested off-screen, so it does not die out at once). Each time the scene appears it picks one of eight rules at random and shows its name and rule in the top-left corner; the same refresh button (or M) picks another rule and starts again from a new seed without leaving the scene. A rule `Bx/Sy` means a dead cell is born with x live neighbours and a live cell survives with y.
+A life-like cellular automaton on a grid that wraps around the edges. It starts from a sparse handful of cells (about a third of a 7×7 patch) in the centre of an otherwise empty screen and evolves slowly from there. The seed is the best of a dozen random tries, tested off-screen, chosen so it neither dies out at once nor floods the screen; if the pattern ever covers more than 15% of the grid, it starts again. Each time the scene appears it picks one of eight rules at random and shows its name and rule in the top-left corner; the same refresh button (or M) picks another rule and starts again from a new seed without leaving the scene. A rule `Bx/Sy` means a dead cell is born with x live neighbours and a live cell survives with y.
 
 | Rule | Notation |
 | ---- | -------- |
 | Conway's Game of Life | B3/S23 |
 | HighLife | B36/S23 |
 | Day & Night | B3678/S34678 |
-| Seeds | B2/S |
-| 34 Life | B34/S34 |
+| DryLife | B37/S23 |
+| Pedestrian Life | B38/S23 |
 | Amoeba | B357/S1358 |
 | Morley (Move) | B368/S245 |
 | 2×2 | B36/S125 |
 
-Louder music runs more generations per second, each column takes the colour and brightness of the bar at the same distance from the centre, and dead cells fade out slowly. Strong beats make a few living cells light up a neighbour, which nudges the pattern into new shapes (this also happens every few seconds when there are no beats). If everything dies, a new seed appears in the centre.
+The grid steps 2 generations per second, up to 6 when the music is loud, each column takes the colour and brightness of the bar at the same distance from the centre, and dead cells fade out slowly. Strong beats (at most one every 1.5 seconds) make one to three living cells light up a neighbour, which nudges the pattern into new shapes (this also happens every 6 seconds when there are no beats). If everything dies, a new seed appears in the centre.
 
 Click a cell to light it (or click a lit one to turn it off), and drag to light a line of cells. The grid holds still while the mouse button is down, so you can draw a shape; when you let go, your cells join the pattern and follow the same rule. Newly lit cells glow white and cool to their colour.
 

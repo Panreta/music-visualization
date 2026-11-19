@@ -261,7 +261,7 @@
         if (Math.random() < 0.5) spawnShootingStar();
       } else if (scene === 'brownian') {
         brownKick = 1;   // temperature spike
-      } else {
+      } else if (t - lifeLastSeed > 1.5) {
         beatLife();
       }
     }
@@ -1174,14 +1174,14 @@
   let lifeAcc = 0, lifeQuiet = 0, lifeLastSeed = 0;
 
   const LIFE_RULES = [
-    { name: "Conway's Game of Life", rule: 'B3/S23', density: 0.3 },
-    { name: 'HighLife', rule: 'B36/S23', density: 0.3 },
-    { name: 'Day & Night', rule: 'B3678/S34678', density: 0.5 },
-    { name: 'Seeds', rule: 'B2/S', density: 0.04 },
-    { name: '34 Life', rule: 'B34/S34', density: 0.2 },
-    { name: 'Amoeba', rule: 'B357/S1358', density: 0.35 },
-    { name: 'Morley (Move)', rule: 'B368/S245', density: 0.35 },
-    { name: '2×2', rule: 'B36/S125', density: 0.35 },
+    { name: "Conway's Game of Life", rule: 'B3/S23' },
+    { name: 'HighLife', rule: 'B36/S23' },
+    { name: 'DryLife', rule: 'B37/S23' },
+    { name: 'Pedestrian Life', rule: 'B38/S23' },
+    { name: 'Day & Night', rule: 'B3678/S34678' },
+    { name: 'Amoeba', rule: 'B357/S1358' },
+    { name: 'Morley (Move)', rule: 'B368/S245' },
+    { name: '2×2', rule: 'B36/S125' },
   ];
   // Turn "B36/S23" into bit masks: bit n set means n neighbours qualifies
   for (const r of LIFE_RULES) {
@@ -1217,8 +1217,8 @@
   window.addEventListener('resize', resizeLife);
   resizeLife();
 
-  // Run a 7×7 seed for a while on a small test grid and score how well it
-  // grows: how many cells are alive at the end, and that it is still changing
+  // Run a 7×7 seed for a while on a small test grid and score it: it should
+  // survive and keep changing, but stay sparse rather than flood the screen
   const TEST = 48;
   const testA = new Uint8Array(TEST * TEST), testB = new Uint8Array(TEST * TEST);
   function scoreSeed(seed) {
@@ -1245,16 +1245,16 @@
       [cur, nxt] = [nxt, cur];
       if (!pop) return 0;
     }
-    return pop + changed * 4;
+    return 1 + Math.min(changed, 20) * 4 + Math.min(pop, 40) - Math.max(0, pop - 80) * 2;
   }
 
-  // Clear the grid and drop a small seed in the centre: the best of a few
-  // random tries, so it grows and evolves instead of dying out at once
+  // Clear the grid and drop a small, sparse seed in the centre: the best of a
+  // few random tries, so it evolves instead of dying out or exploding
   function seedLife() {
     lifeCells.fill(0);
     lifeGlow.fill(0);
     lifeFlash.fill(0);
-    const dens = lifeRule.density < 0.1 ? 0.3 : 0.5;
+    const dens = 0.3;
     let best = null, bestScore = -1;
     for (let tries = 0; tries < 12; tries++) {
       const seed = Array.from({ length: 49 }, () => (Math.random() < dens ? 1 : 0));
@@ -1302,7 +1302,7 @@
   // On a beat, a few living cells light up a random neighbour each
   function beatLife() {
     lifeLastSeed = performance.now() / 1000;
-    const n = 3 + Math.round(mood.level * 6);
+    const n = 1 + Math.round(mood.level * 2);
     for (let k = 0, tries = 0; k < n && tries < 400; tries++) {
       const i = (Math.random() * lifeCells.length) | 0;
       if (!lifeCells[i]) continue;
@@ -1349,7 +1349,7 @@
 
     // Louder music runs more generations per second. Hold still while the
     // pointer is down so cells can be drawn before they start evolving.
-    if (!pointerDown) lifeAcc += dt * (4 + mood.level * 12);
+    if (!pointerDown) lifeAcc += dt * (2 + mood.level * 4);
     let steps = 0;
     while (lifeAcc >= 1 && steps < 3) {
       lifeAcc -= 1;
@@ -1359,11 +1359,12 @@
       if (pop === 0) lifeQuiet++;
       else lifeQuiet = 0;
       if (lifeQuiet > 8) seedLife();
-      if (pop > lifeCells.length * 0.6 && lifeRule.density < 0.1) seedLife();
+      // Keep it sparse: if the pattern takes over the screen, start again
+      if (pop > lifeCells.length * 0.15) seedLife();
     }
     if (lifeAcc >= 1) lifeAcc = 0;
     // Without beats (quiet passage or no music), still spark now and then
-    if (!pointerDown && t - lastBeat > 4 && t - lifeLastSeed > 4) beatLife();
+    if (!pointerDown && t - lastBeat > 6 && t - lifeLastSeed > 6) beatLife();
 
     // Each column takes the colour of the bar at the same distance from the centre
     const h = hue + tone * 140;
@@ -1375,7 +1376,7 @@
       colRgb[x] = hslToRgb(h - 40 + (k / BARS) * 110, 0.8, 0.5 + e * 0.25);
     }
 
-    const fade = Math.exp(-dt * 4), flashFade = Math.exp(-dt * 2.5);
+    const fade = Math.exp(-dt * 2), flashFade = Math.exp(-dt * 2.5);
     const data = lifeImg.data;
     for (let y = 0, i = 0; y < lifeRows; y++) {
       for (let x = 0; x < lifeCols; x++, i++) {
