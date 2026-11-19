@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Music Visualizer</title>
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
   <canvas id="stage"></canvas>
@@ -16,7 +16,12 @@
     <p class="sub">Sit back. Click or drag on the screen to make ripples.</p>
   </div>
 
-  <div id="modelLabel" class="model-label" aria-live="polite"></div>
+  <div id="modelLabel" class="model-label">
+    <div id="modelText" class="model-text" aria-live="polite"></div>
+    <button id="modelBtn" class="model-refresh" title="Another equation (M)" aria-label="Another equation">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    </button>
+  </div>
 
   <div id="dropOverlay" class="drop-overlay"><span>Drop to play</span></div>
 
@@ -56,6 +61,6 @@
     </label>
   </div>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

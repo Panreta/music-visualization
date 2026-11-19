@@ -33,7 +33,7 @@ There are four backgrounds (scenes):
 
 **Scene 4: Brownian motion**
 
-A particle system driven by stochastic differential equations. Each time the scene appears it picks one of five models at random, and shows its name and equation in the top-left corner (press M for another). About 1,200 particles are stepped with the Euler–Maruyama method, `X += drift·dt + σ·√dt·N(0,1)`, and their fading trails draw the random paths.
+A particle system driven by stochastic differential equations. Each time the scene appears it picks one of five models at random, and shows its name and equation in the top-left corner (press the refresh button next to it, or M, for another; the scene stays, only the equation changes). About 1,200 particles are stepped with the Euler–Maruyama method, `X += drift·dt + σ·√dt·N(0,1)`, and their fading trails draw the random paths.
 
 | Model | Equation | Looks like |
 | ----- | -------- | ---------- |

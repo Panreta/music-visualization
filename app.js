@@ -957,6 +957,7 @@
   const bctx = btrail.getContext('2d');
   const brown = [];
   const modelLabel = $('modelLabel');
+  const modelText = $('modelText');
   let brownModel = null;
   let brownKick = 0;
 
@@ -1089,6 +1090,7 @@
   }
   window.addEventListener('resize', resizeBrownTrail);
   resizeBrownTrail();
+  $('modelBtn').addEventListener('click', (e) => { pickBrownianModel(); e.currentTarget.blur(); });
 
   // Pick a model at random (never the same one twice in a row) and restart
   function pickBrownianModel() {
@@ -1103,7 +1105,7 @@
       brown.push(p);
     }
     bctx.clearRect(0, 0, btrail.width, btrail.height);
-    modelLabel.innerHTML = `<strong>${m.name}</strong><span>${m.eq}</span>`;
+    modelText.innerHTML = `<strong>${m.name}</strong><span>${m.eq}</span>`;
   }
 
   // Release a burst of particles at a point: they spread out like heat

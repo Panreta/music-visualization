@@ -71,9 +71,9 @@ body.idle { cursor: none; }
   left: 16px;
   max-width: calc(100% - 32px);
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 14px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -84,13 +84,36 @@ body.idle { cursor: none; }
   opacity: 0;
   transition: opacity 0.6s ease;
 }
+.model-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
 .model-label strong { font-weight: 600; }
 .model-label span {
   color: var(--muted);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 12px;
 }
+.model-refresh {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.4s ease;
+}
+.model-refresh:hover { background: rgba(255, 255, 255, 0.08); }
+.model-refresh:active { transform: rotate(180deg); }
 .model-label.show { opacity: 1; }
+.model-label.show .model-refresh { pointer-events: auto; }
 body.idle .model-label.show { opacity: 0.55; }
 
 /* Drag & drop overlay */
