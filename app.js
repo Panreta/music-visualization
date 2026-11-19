@@ -1158,15 +1158,17 @@
   // ---------- Scene: Game of Life ----------
   // A life-like cellular automaton on a wrapping grid. Each time the scene
   // appears, one rule is picked at random (Bx/Sy: a dead cell is born with x
-  // live neighbours, a live cell survives with y). The music sets how many
-  // generations run per second and colours the columns like the bars, beats
-  // drop patches of random soup, and a click seeds a patch where you clicked.
+  // live neighbours, a live cell survives with y) and a small random seed is
+  // placed in the centre to grow from there. The music sets how many
+  // generations run per second and colours the columns like the bars, and
+  // beats spark a few cells next to living ones. Click or drag to light
+  // cells; the grid holds still while the pointer is down so you can draw.
   const lcan = document.createElement('canvas');
   const lctx = lcan.getContext('2d');
   const gridCan = document.createElement('canvas');
   let lifeCols = 0, lifeRows = 0, lifeCell = 12;
   let lifeCells = new Uint8Array(0), lifeNext = new Uint8Array(0);
-  let lifeGlow = new Float32Array(0);
+  let lifeGlow = new Float32Array(0), lifeFlash = new Float32Array(0);
   let lifeImg = null;
   let lifeRule = null;
   let lifeAcc = 0, lifeQuiet = 0, lifeLastSeed = 0;
@@ -1196,6 +1198,7 @@
     lifeCells = new Uint8Array(n);
     lifeNext = new Uint8Array(n);
     lifeGlow = new Float32Array(n);
+    lifeFlash = new Float32Array(n);
     lcan.width = lifeCols;
     lcan.height = lifeRows;
     lifeImg = lctx.createImageData(lifeCols, lifeRows);
@@ -1214,14 +1217,63 @@
   window.addEventListener('resize', resizeLife);
   resizeLife();
 
-  function seedLife() {
-    const d = lifeRule.density;
-    for (let i = 0; i < lifeCells.length; i++) {
-      lifeCells[i] = Math.random() < d ? 1 : 0;
-      lifeGlow[i] = lifeCells[i];
+  // Run a 7×7 seed for a while on a small test grid and score how well it
+  // grows: how many cells are alive at the end, and that it is still changing
+  const TEST = 48;
+  const testA = new Uint8Array(TEST * TEST), testB = new Uint8Array(TEST * TEST);
+  function scoreSeed(seed) {
+    let cur = testA, nxt = testB;
+    cur.fill(0);
+    const o = (TEST >> 1) - 3;
+    for (let k = 0; k < 49; k++) if (seed[k]) cur[(o + ((k / 7) | 0)) * TEST + o + k % 7] = 1;
+    const born = lifeRule.born, survive = lifeRule.survive;
+    let pop = 0, changed = 0;
+    for (let gen = 0; gen < 120; gen++) {
+      pop = 0;
+      changed = 0;
+      for (let y = 1; y < TEST - 1; y++) {
+        for (let x = 1; x < TEST - 1; x++) {
+          const i = y * TEST + x;
+          const n = cur[i - TEST - 1] + cur[i - TEST] + cur[i - TEST + 1] + cur[i - 1] + cur[i + 1] +
+            cur[i + TEST - 1] + cur[i + TEST] + cur[i + TEST + 1];
+          const alive = (cur[i] ? survive : born) >> n & 1;
+          nxt[i] = alive;
+          pop += alive;
+          changed += alive !== cur[i];
+        }
+      }
+      [cur, nxt] = [nxt, cur];
+      if (!pop) return 0;
     }
+    return pop + changed * 4;
+  }
+
+  // Clear the grid and drop a small seed in the centre: the best of a few
+  // random tries, so it grows and evolves instead of dying out at once
+  function seedLife() {
+    lifeCells.fill(0);
+    lifeGlow.fill(0);
+    lifeFlash.fill(0);
+    const dens = lifeRule.density < 0.1 ? 0.3 : 0.5;
+    let best = null, bestScore = -1;
+    for (let tries = 0; tries < 12; tries++) {
+      const seed = Array.from({ length: 49 }, () => (Math.random() < dens ? 1 : 0));
+      const sc = scoreSeed(seed);
+      if (sc > bestScore) { best = seed; bestScore = sc; }
+    }
+    const cx = (lifeCols >> 1) - 3, cy = (lifeRows >> 1) - 3;
+    for (let k = 0; k < 49; k++) if (best[k]) setLifeCell(cx + k % 7, cy + ((k / 7) | 0), 1);
     lifeAcc = 0;
     lifeQuiet = 0;
+  }
+
+  function setLifeCell(x, y, on) {
+    x = (x % lifeCols + lifeCols) % lifeCols;
+    y = (y % lifeRows + lifeRows) % lifeRows;
+    const i = y * lifeCols + x;
+    lifeCells[i] = on;
+    lifeGlow[i] = on;
+    return i;
   }
 
   // Pick a rule at random (never the same one twice in a row) and reseed
@@ -1234,28 +1286,30 @@
     modelText.innerHTML = `<strong>${r.name}</strong><span>${r.rule}</span>`;
   }
 
-  // Scatter random live cells in a disc around a grid point
-  function soupLife(cx, cy, rad) {
-    const dens = Math.max(0.25, lifeRule.density);
-    for (let dy = -rad; dy <= rad; dy++) {
-      for (let dx = -rad; dx <= rad; dx++) {
-        if (dx * dx + dy * dy > rad * rad || Math.random() > dens) continue;
-        const x = (cx + dx + lifeCols) % lifeCols, y = (cy + dy + lifeRows) % lifeRows;
-        const i = y * lifeCols + x;
-        lifeCells[i] = 1;
-        lifeGlow[i] = 1;
-      }
-    }
-  }
-  function burstLife(px, py) {
+  // Light the cell under the pointer. A click toggles it; a drag only lights.
+  let lifeLastPainted = -1;
+  function paintLife(px, py, toggle) {
     if (!lifeRule) return;
-    soupLife(Math.floor(px / lifeCell), Math.floor(py / lifeCell), 6);
+    const x = Math.floor(px / lifeCell), y = Math.floor(py / lifeCell);
+    const i = y * lifeCols + x;
+    if (x < 0 || y < 0 || x >= lifeCols || y >= lifeRows || (!toggle && i === lifeLastPainted)) return;
+    lifeLastPainted = i;
+    const on = toggle ? 1 - lifeCells[i] : 1;
+    setLifeCell(x, y, on);
+    if (on) lifeFlash[i] = 1;
   }
+
+  // On a beat, a few living cells light up a random neighbour each
   function beatLife() {
     lifeLastSeed = performance.now() / 1000;
-    const n = 2 + Math.round(mood.level * 3);
-    for (let k = 0; k < n; k++) {
-      soupLife((Math.random() * lifeCols) | 0, (Math.random() * lifeRows) | 0, 3 + ((Math.random() * 3) | 0));
+    const n = 3 + Math.round(mood.level * 6);
+    for (let k = 0, tries = 0; k < n && tries < 400; tries++) {
+      const i = (Math.random() * lifeCells.length) | 0;
+      if (!lifeCells[i]) continue;
+      const x = i % lifeCols, y = (i / lifeCols) | 0;
+      const j = setLifeCell(x + ((Math.random() * 3) | 0) - 1, y + ((Math.random() * 3) | 0) - 1, 1);
+      lifeFlash[j] = 0.6;
+      k++;
     }
   }
 
@@ -1293,22 +1347,23 @@
     if (!lifeRule) return;
     const live = analyser && !audio.paused;
 
-    // Louder music runs more generations per second
-    lifeAcc += dt * (6 + mood.level * 18);
+    // Louder music runs more generations per second. Hold still while the
+    // pointer is down so cells can be drawn before they start evolving.
+    if (!pointerDown) lifeAcc += dt * (4 + mood.level * 12);
     let steps = 0;
     while (lifeAcc >= 1 && steps < 3) {
       lifeAcc -= 1;
       steps++;
       const pop = stepLife();
-      // Never let the screen die out or freeze into a few still lifes
-      if (pop < lifeCells.length * 0.01) lifeQuiet++;
+      // If everything dies, start again from a fresh seed in the centre
+      if (pop === 0) lifeQuiet++;
       else lifeQuiet = 0;
-      if (lifeQuiet > 12) { beatLife(); lifeQuiet = 0; }
+      if (lifeQuiet > 8) seedLife();
       if (pop > lifeCells.length * 0.6 && lifeRule.density < 0.1) seedLife();
     }
     if (lifeAcc >= 1) lifeAcc = 0;
-    // Without beats (quiet passage or no music), still drop a patch now and then
-    if (t - lastBeat > 4 && t - lifeLastSeed > 4) beatLife();
+    // Without beats (quiet passage or no music), still spark now and then
+    if (!pointerDown && t - lastBeat > 4 && t - lifeLastSeed > 4) beatLife();
 
     // Each column takes the colour of the bar at the same distance from the centre
     const h = hue + tone * 140;
@@ -1320,15 +1375,20 @@
       colRgb[x] = hslToRgb(h - 40 + (k / BARS) * 110, 0.8, 0.5 + e * 0.25);
     }
 
-    const fade = Math.exp(-dt * 4);
+    const fade = Math.exp(-dt * 4), flashFade = Math.exp(-dt * 2.5);
     const data = lifeImg.data;
     for (let y = 0, i = 0; y < lifeRows; y++) {
       for (let x = 0; x < lifeCols; x++, i++) {
         const g = lifeCells[i] ? 1 : lifeGlow[i] * fade;
         lifeGlow[i] = g;
+        // Cells you lit (or a beat sparked) start out white-hot and cool to their colour
+        const fl = lifeFlash[i];
+        if (fl) lifeFlash[i] = fl > 0.01 ? fl * flashFade : 0;
         const c = colRgb[x], o = i * 4;
-        data[o] = c[0]; data[o + 1] = c[1]; data[o + 2] = c[2];
-        data[o + 3] = lifeCells[i] ? 200 + colE[x] * 55 : g * 110;
+        data[o] = c[0] + (255 - c[0]) * fl;
+        data[o + 1] = c[1] + (255 - c[1]) * fl;
+        data[o + 2] = c[2] + (255 - c[2]) * fl;
+        data[o + 3] = Math.max(lifeCells[i] ? 200 + colE[x] * 55 : g * 110, fl * 255);
       }
     }
     lctx.putImageData(lifeImg, 0, 0);
@@ -1496,12 +1556,14 @@
     } else if (scene === 'brownian') {
       burstBrownian(e.clientX, e.clientY);
     } else {
-      burstLife(e.clientX, e.clientY);
+      lifeLastPainted = -1;
+      paintLife(e.clientX, e.clientY, true);
     }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!pointerDown) return;
+    if (scene === 'life') paintLife(e.clientX, e.clientY, false);
     const now = performance.now();
     if (now - lastDragRipple > 70) {
       lastDragRipple = now;

@@ -47,7 +47,7 @@ The music sets the temperature (the noise strength σ), beats kick it up, bass a
 
 **Scene 5: Game of Life**
 
-A life-like cellular automaton on a grid that wraps around the edges. Each time the scene appears it picks one of eight rules at random and shows its name and rule in the top-left corner; the same refresh button (or M) picks another rule and reseeds the grid without leaving the scene. A rule `Bx/Sy` means a dead cell is born with x live neighbours and a live cell survives with y.
+A life-like cellular automaton on a grid that wraps around the edges. It starts from a small 7×7 seed in the centre of an otherwise empty screen and grows and evolves from there (the seed is the best of a dozen random tries, tested off-screen, so it does not die out at once). Each time the scene appears it picks one of eight rules at random and shows its name and rule in the top-left corner; the same refresh button (or M) picks another rule and starts again from a new seed without leaving the scene. A rule `Bx/Sy` means a dead cell is born with x live neighbours and a live cell survives with y.
 
 | Rule | Notation |
 | ---- | -------- |
@@ -60,7 +60,9 @@ A life-like cellular automaton on a grid that wraps around the edges. Each time 
 | Morley (Move) | B368/S245 |
 | 2×2 | B36/S125 |
 
-Louder music runs more generations per second, each column takes the colour and brightness of the bar at the same distance from the centre, and dead cells fade out slowly. Strong beats drop patches of random soup onto the grid (one also drops every few seconds when there are no beats), and a click seeds a patch where you clicked.
+Louder music runs more generations per second, each column takes the colour and brightness of the bar at the same distance from the centre, and dead cells fade out slowly. Strong beats make a few living cells light up a neighbour, which nudges the pattern into new shapes (this also happens every few seconds when there are no beats). If everything dies, a new seed appears in the centre.
+
+Click a cell to light it (or click a lit one to turn it off), and drag to light a line of cells. The grid holds still while the mouse button is down, so you can draw a shape; when you let go, your cells join the pattern and follow the same rule. Newly lit cells glow white and cool to their colour.
 
 **On top of every scene:**
 
@@ -102,4 +104,4 @@ The control bar hides after 3 seconds of no mouse movement while music plays; mo
 - **Mood:** the base colour turns slowly around the colour wheel, a little faster when the music is fuller. The whole screen brightens with loudness and lifts gently on strong beats.
 - **Bars:** soft, translucent bars mirrored from the centre, with bass in the middle.
 - **Texture:** faint floating motes and fine film grain (a static CSS layer).
-- **Ripples:** click or drag to send out rings that push the motes aside, warp the glass, swirl the vector field, scatter the fireflies, release a burst of Brownian particles, or seed new Life cells. They grow larger when the music is louder.
+- **Ripples:** click or drag to send out rings that push the motes aside, warp the glass, swirl the vector field, scatter the fireflies, release a burst of Brownian particles, or light Life cells. They grow larger when the music is louder.
