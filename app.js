@@ -160,7 +160,7 @@
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'b' || e.key === 'B') setBars(!showBars);
     else if (e.key === 's' || e.key === 'S') nextScene();
-    else if ((e.key === 'm' || e.key === 'M') && scene === 'brownian') pickBrownianModel();
+    else if (e.key === 'm' || e.key === 'M') refreshModel();
     else if (e.key === 'f' || e.key === 'F') {
       if (document.fullscreenElement) document.exitFullscreen();
       else document.documentElement.requestFullscreen?.();
@@ -259,8 +259,10 @@
       } else if (scene === 'dust') {
         flashFireflies(0.35 + mood.level * 0.3);
         if (Math.random() < 0.5) spawnShootingStar();
-      } else {
+      } else if (scene === 'brownian') {
         brownKick = 1;   // temperature spike
+      } else {
+        beatLife();
       }
     }
     swell = Math.max(0, swell - dt * 0.9);
@@ -1090,7 +1092,6 @@
   }
   window.addEventListener('resize', resizeBrownTrail);
   resizeBrownTrail();
-  $('modelBtn').addEventListener('click', (e) => { pickBrownianModel(); e.currentTarget.blur(); });
 
   // Pick a model at random (never the same one twice in a row) and restart
   function pickBrownianModel() {
@@ -1154,16 +1155,208 @@
     ctx.drawImage(btrail, 0, 0, W, H);
   }
 
+  // ---------- Scene: Game of Life ----------
+  // A life-like cellular automaton on a wrapping grid. Each time the scene
+  // appears, one rule is picked at random (Bx/Sy: a dead cell is born with x
+  // live neighbours, a live cell survives with y). The music sets how many
+  // generations run per second and colours the columns like the bars, beats
+  // drop patches of random soup, and a click seeds a patch where you clicked.
+  const lcan = document.createElement('canvas');
+  const lctx = lcan.getContext('2d');
+  const gridCan = document.createElement('canvas');
+  let lifeCols = 0, lifeRows = 0, lifeCell = 12;
+  let lifeCells = new Uint8Array(0), lifeNext = new Uint8Array(0);
+  let lifeGlow = new Float32Array(0);
+  let lifeImg = null;
+  let lifeRule = null;
+  let lifeAcc = 0, lifeQuiet = 0, lifeLastSeed = 0;
+
+  const LIFE_RULES = [
+    { name: "Conway's Game of Life", rule: 'B3/S23', density: 0.3 },
+    { name: 'HighLife', rule: 'B36/S23', density: 0.3 },
+    { name: 'Day & Night', rule: 'B3678/S34678', density: 0.5 },
+    { name: 'Seeds', rule: 'B2/S', density: 0.04 },
+    { name: '34 Life', rule: 'B34/S34', density: 0.2 },
+    { name: 'Amoeba', rule: 'B357/S1358', density: 0.35 },
+    { name: 'Morley (Move)', rule: 'B368/S245', density: 0.35 },
+    { name: '2×2', rule: 'B36/S125', density: 0.35 },
+  ];
+  // Turn "B36/S23" into bit masks: bit n set means n neighbours qualifies
+  for (const r of LIFE_RULES) {
+    const [b, s] = r.rule.slice(1).split('/S');
+    r.born = [...b].reduce((m, d) => m | (1 << d), 0);
+    r.survive = [...s].reduce((m, d) => m | (1 << d), 0);
+  }
+
+  function resizeLife() {
+    lifeCell = Math.max(8, Math.round(Math.min(W, H) / 85));
+    lifeCols = Math.max(1, Math.ceil(W / lifeCell));
+    lifeRows = Math.max(1, Math.ceil(H / lifeCell));
+    const n = lifeCols * lifeRows;
+    lifeCells = new Uint8Array(n);
+    lifeNext = new Uint8Array(n);
+    lifeGlow = new Float32Array(n);
+    lcan.width = lifeCols;
+    lcan.height = lifeRows;
+    lifeImg = lctx.createImageData(lifeCols, lifeRows);
+    // Faint grid lines, drawn once, so the cells read as tiles
+    gridCan.width = Math.max(1, Math.round(W));
+    gridCan.height = Math.max(1, Math.round(H));
+    const g = gridCan.getContext('2d');
+    g.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let x = 0; x <= lifeCols; x++) { g.moveTo(x * lifeCell + 0.5, 0); g.lineTo(x * lifeCell + 0.5, H); }
+    for (let y = 0; y <= lifeRows; y++) { g.moveTo(0, y * lifeCell + 0.5); g.lineTo(W, y * lifeCell + 0.5); }
+    g.stroke();
+    if (lifeRule) seedLife();
+  }
+  window.addEventListener('resize', resizeLife);
+  resizeLife();
+
+  function seedLife() {
+    const d = lifeRule.density;
+    for (let i = 0; i < lifeCells.length; i++) {
+      lifeCells[i] = Math.random() < d ? 1 : 0;
+      lifeGlow[i] = lifeCells[i];
+    }
+    lifeAcc = 0;
+    lifeQuiet = 0;
+  }
+
+  // Pick a rule at random (never the same one twice in a row) and reseed
+  function pickLifeRule() {
+    let r;
+    do r = LIFE_RULES[(Math.random() * LIFE_RULES.length) | 0];
+    while (r === lifeRule && LIFE_RULES.length > 1);
+    lifeRule = r;
+    seedLife();
+    modelText.innerHTML = `<strong>${r.name}</strong><span>${r.rule}</span>`;
+  }
+
+  // Scatter random live cells in a disc around a grid point
+  function soupLife(cx, cy, rad) {
+    const dens = Math.max(0.25, lifeRule.density);
+    for (let dy = -rad; dy <= rad; dy++) {
+      for (let dx = -rad; dx <= rad; dx++) {
+        if (dx * dx + dy * dy > rad * rad || Math.random() > dens) continue;
+        const x = (cx + dx + lifeCols) % lifeCols, y = (cy + dy + lifeRows) % lifeRows;
+        const i = y * lifeCols + x;
+        lifeCells[i] = 1;
+        lifeGlow[i] = 1;
+      }
+    }
+  }
+  function burstLife(px, py) {
+    if (!lifeRule) return;
+    soupLife(Math.floor(px / lifeCell), Math.floor(py / lifeCell), 6);
+  }
+  function beatLife() {
+    lifeLastSeed = performance.now() / 1000;
+    const n = 2 + Math.round(mood.level * 3);
+    for (let k = 0; k < n; k++) {
+      soupLife((Math.random() * lifeCols) | 0, (Math.random() * lifeRows) | 0, 3 + ((Math.random() * 3) | 0));
+    }
+  }
+
+  function stepLife() {
+    const C = lifeCols, R = lifeRows, cur = lifeCells, nxt = lifeNext;
+    const born = lifeRule.born, survive = lifeRule.survive;
+    let pop = 0;
+    for (let y = 0; y < R; y++) {
+      const up = ((y + R - 1) % R) * C, row = y * C, dn = ((y + 1) % R) * C;
+      for (let x = 0; x < C; x++) {
+        const l = x === 0 ? C - 1 : x - 1, r = x === C - 1 ? 0 : x + 1;
+        const n = cur[up + l] + cur[up + x] + cur[up + r] + cur[row + l] + cur[row + r] +
+          cur[dn + l] + cur[dn + x] + cur[dn + r];
+        const alive = (cur[row + x] ? survive : born) >> n & 1;
+        nxt[row + x] = alive;
+        pop += alive;
+      }
+    }
+    lifeNext = cur;
+    lifeCells = nxt;
+    return pop;
+  }
+
+  function hslToRgb(h, s, l) {
+    h = ((h % 360) + 360) % 360 / 360;
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    const f = (t) => {
+      t = (t + 1) % 1;
+      return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
+    };
+    return [f(h + 1 / 3) * 255, f(h) * 255, f(h - 1 / 3) * 255];
+  }
+
+  function updateAndDrawLife(t, dt) {
+    if (!lifeRule) return;
+    const live = analyser && !audio.paused;
+
+    // Louder music runs more generations per second
+    lifeAcc += dt * (6 + mood.level * 18);
+    let steps = 0;
+    while (lifeAcc >= 1 && steps < 3) {
+      lifeAcc -= 1;
+      steps++;
+      const pop = stepLife();
+      // Never let the screen die out or freeze into a few still lifes
+      if (pop < lifeCells.length * 0.01) lifeQuiet++;
+      else lifeQuiet = 0;
+      if (lifeQuiet > 12) { beatLife(); lifeQuiet = 0; }
+      if (pop > lifeCells.length * 0.6 && lifeRule.density < 0.1) seedLife();
+    }
+    if (lifeAcc >= 1) lifeAcc = 0;
+    // Without beats (quiet passage or no music), still drop a patch now and then
+    if (t - lastBeat > 4 && t - lifeLastSeed > 4) beatLife();
+
+    // Each column takes the colour of the bar at the same distance from the centre
+    const h = hue + tone * 140;
+    const colRgb = new Array(lifeCols), colE = new Float32Array(lifeCols);
+    for (let x = 0; x < lifeCols; x++) {
+      const k = Math.min(BARS - 1, Math.floor(Math.abs((x + 0.5) / lifeCols - 0.5) * 2 * BARS));
+      const e = live ? bars[k] : 0.05;
+      colE[x] = e;
+      colRgb[x] = hslToRgb(h - 40 + (k / BARS) * 110, 0.8, 0.5 + e * 0.25);
+    }
+
+    const fade = Math.exp(-dt * 4);
+    const data = lifeImg.data;
+    for (let y = 0, i = 0; y < lifeRows; y++) {
+      for (let x = 0; x < lifeCols; x++, i++) {
+        const g = lifeCells[i] ? 1 : lifeGlow[i] * fade;
+        lifeGlow[i] = g;
+        const c = colRgb[x], o = i * 4;
+        data[o] = c[0]; data[o + 1] = c[1]; data[o + 2] = c[2];
+        data[o + 3] = lifeCells[i] ? 200 + colE[x] * 55 : g * 110;
+      }
+    }
+    lctx.putImageData(lifeImg, 0, 0);
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(lcan, 0, 0, lifeCols * lifeCell, lifeRows * lifeCell);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(gridCan, 0, 0, W, H);
+  }
+
   // ---------- Scene selection ----------
   // Each page load and each new song picks one of the backgrounds at random
-  const SCENES = ['glass', 'flow', 'dust', 'brownian'];
+  const SCENES = ['glass', 'flow', 'dust', 'brownian', 'life'];
   let scene = 'glass';
   function setScene(name) {
     scene = name;
     if (name === 'flow') tctx.clearRect(0, 0, trail.width, trail.height);
     if (name === 'brownian') pickBrownianModel();
-    modelLabel.classList.toggle('show', name === 'brownian');
+    if (name === 'life') pickLifeRule();
+    modelLabel.classList.toggle('show', name === 'brownian' || name === 'life');
   }
+  // The refresh button (and M) swaps the equation or rule but keeps the scene
+  function refreshModel() {
+    if (scene === 'brownian') pickBrownianModel();
+    else if (scene === 'life') pickLifeRule();
+  }
+  $('modelBtn').addEventListener('click', (e) => { refreshModel(); e.currentTarget.blur(); });
   function pickRandomScene() {
     setScene(SCENES[(Math.random() * SCENES.length) | 0]);
   }
@@ -1300,8 +1493,10 @@
           f.vy += (dy / d) * 120;
         }
       }
-    } else {
+    } else if (scene === 'brownian') {
       burstBrownian(e.clientX, e.clientY);
+    } else {
+      burstLife(e.clientX, e.clientY);
     }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
@@ -1389,8 +1584,10 @@
       updateAndDrawFlow(t, dt);
     } else if (scene === 'dust') {
       updateAndDrawDust(t, dt);
-    } else {
+    } else if (scene === 'brownian') {
       updateAndDrawBrownian(t, dt);
+    } else {
+      updateAndDrawLife(t, dt);
     }
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
