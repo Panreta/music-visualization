@@ -15,6 +15,7 @@ python3 -m http.server 8000
 
 - **Load music:** press **Choose MP3**, or drag an audio file onto the page.
 - **Ripples:** click anywhere on the screen; drag to leave a trail of ripples.
+- **Geometry:** faint outlined triangles, squares, pentagons and hexagons float and turn slowly across the screen. Each one listens to its own part of the music, and its edges light up at random, more often when that part is loud. Strong beats light a burst of edges, and a ripple passing over a corner lights the edges that meet there.
 - **Bars:** show or hide the bar graph with the **Bars** button.
 
 | Key   | Action             |

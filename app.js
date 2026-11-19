@@ -238,6 +238,7 @@
     if (live && b > 0.35 && b > bassAvg * 1.3 && t - lastBeat > 0.5) {
       lastBeat = t;
       swell = Math.min(1, swell + 0.5);
+      sparkleEdges(4 + Math.round(mood.level * 8));
     }
     swell = Math.max(0, swell - dt * 0.9);
 
@@ -286,6 +287,115 @@
     ctx.fillStyle = grain;
     ctx.fillRect(-128, -128, W + 256, H + 256);
     ctx.restore();
+  }
+
+  // ---------- Geometry ----------
+  // Outlined shapes scattered across the screen. Their edges light up at
+  // random: more often when their slice of the music is loud, in bursts on
+  // beats, and wherever a ripple passes over a corner.
+  const shapes = [];
+  function layoutShapes() {
+    shapes.length = 0;
+    const cols = Math.max(3, Math.round(W / 260));
+    const rows = Math.max(2, Math.round(H / 260));
+    const cw = W / cols, ch = H / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (Math.random() < 0.25) continue;   // leave some gaps so it doesn't look like a grid
+        const sides = [3, 4, 5, 6][(Math.random() * 4) | 0];
+        shapes.push({
+          x: (c + 0.2 + Math.random() * 0.6) * cw,
+          y: (r + 0.2 + Math.random() * 0.6) * ch,
+          size: Math.min(cw, ch) * (0.18 + Math.random() * 0.22),
+          sides,
+          rot: Math.random() * Math.PI * 2,
+          spin: (Math.random() - 0.5) * 0.12,
+          ph: Math.random() * Math.PI * 2,
+          band: Math.random(),               // which part of the spectrum it listens to: 0 = bass, 1 = treble
+          glow: new Float32Array(sides),     // brightness of each edge, 0..1
+          pts: [],
+        });
+      }
+    }
+  }
+  window.addEventListener('resize', layoutShapes);
+  layoutShapes();
+
+  function lightEdge(s, e, v = 1) {
+    if (v > s.glow[e]) s.glow[e] = v;
+  }
+
+  function sparkleEdges(n) {
+    for (let i = 0; i < n && shapes.length; i++) {
+      const s = shapes[(Math.random() * shapes.length) | 0];
+      lightEdge(s, (Math.random() * s.sides) | 0);
+    }
+  }
+
+  function updateAndDrawShapes(t, dt) {
+    const live = analyser && !audio.paused;
+    const h = hue + tone * 140;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    for (const s of shapes) {
+      s.rot += s.spin * dt * (1 + mood.level * 2);
+      const bob = Math.sin(t * 0.3 + s.ph) * 6;
+      for (let k = 0; k < s.sides; k++) {
+        const a = s.rot + (k / s.sides) * Math.PI * 2;
+        s.pts[k] = [s.x + Math.cos(a) * s.size, s.y + bob + Math.sin(a) * s.size];
+      }
+
+      // Random edges light up; the louder this shape's band, the more often
+      if (live) {
+        const v = bars[Math.min(BARS - 1, (s.band * BARS) | 0)];
+        if (Math.random() < v * v * 6 * dt) lightEdge(s, (Math.random() * s.sides) | 0, 0.6 + v * 0.4);
+      } else if (Math.random() < 0.15 * dt) {
+        lightEdge(s, (Math.random() * s.sides) | 0, 0.5);
+      }
+
+      // A ripple passing over a corner lights both edges that meet there
+      for (const r of ripples) {
+        if (r.p <= 0) continue;
+        for (let k = 0; k < s.sides; k++) {
+          const d = Math.hypot(s.pts[k][0] - r.x, s.pts[k][1] - r.y);
+          if (Math.abs(d - r.radius) < 12) {
+            lightEdge(s, k, 1 - r.p);
+            lightEdge(s, (k + s.sides - 1) % s.sides, 1 - r.p);
+          }
+        }
+      }
+
+      // Faint outline, always visible
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = `hsla(${h + 30}, 50%, 85%, 0.1)`;
+      ctx.beginPath();
+      ctx.moveTo(s.pts[0][0], s.pts[0][1]);
+      for (let k = 1; k < s.sides; k++) ctx.lineTo(s.pts[k][0], s.pts[k][1]);
+      ctx.closePath();
+      ctx.stroke();
+
+      // Lit edges glow, then fade out over about a second
+      const edgeHue = h + 40 + s.band * 60;
+      for (let e = 0; e < s.sides; e++) {
+        const g = s.glow[e];
+        if (g <= 0.01) continue;
+        s.glow[e] = Math.max(0, g - dt * 0.9);
+        const [x1, y1] = s.pts[e];
+        const [x2, y2] = s.pts[(e + 1) % s.sides];
+        ctx.lineWidth = 1.5 + g * 1.5;
+        ctx.strokeStyle = `hsla(${edgeHue}, 90%, 80%, ${g})`;
+        ctx.shadowColor = `hsla(${edgeHue}, 100%, 70%, ${g})`;
+        ctx.shadowBlur = 14 * g;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+    }
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   // ---------- Floating motes ----------
@@ -465,6 +575,7 @@
 
     analyse(t, dt);
     drawField();
+    updateAndDrawShapes(t, dt);
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
     updateAndDrawRipples(dt);
