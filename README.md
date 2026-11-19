@@ -1,6 +1,6 @@
 # Music Visualizer
 
-A browser-based music visualizer. Load an MP3 and watch colours, spectrum graphs and particles react to the sound. Click or drag anywhere to send ripples across the screen.
+A browser-based music visualizer. Load an MP3 and let the whole screen slowly shift colour with the music, with a soft bar graph you can switch on or off. Click or drag anywhere to send ripples across the screen.
 
 ## Run
 
@@ -15,22 +15,22 @@ python3 -m http.server 8000
 
 - **Load music:** press **Choose MP3**, or drag an audio file onto the page.
 - **Ripples:** click anywhere on the screen; drag to leave a trail of ripples.
-- **Styles:** switch between **Radial**, **Bars** and **Terrain** in the control bar.
+- **Bars:** show or hide the bar graph with the **Bars** button.
 
 | Key   | Action             |
 | ----- | ------------------ |
 | Space | Play / pause       |
-| 1 2 3 | Radial / Bars / Terrain |
+| B     | Show / hide bars   |
 | F     | Toggle fullscreen  |
 
 The control bar hides after 3 seconds of no mouse movement while music plays; move the mouse to bring it back.
 
 ## How it works
 
-`app.js` routes the audio element through the Web Audio API `AnalyserNode` and reads frequency and waveform data every frame. It groups the spectrum into 96 log-spaced bands and tracks bass, mid and treble energy, then uses a simple bass-jump test to detect beats. Everything is drawn on one `<canvas>`:
+`app.js` sends the audio through the Web Audio API `AnalyserNode` and reads the frequency data every frame. It splits the spectrum into 48 log-spaced bands and smooths everything heavily so the picture drifts instead of flickering.
 
-- The background hue drifts over time, moves faster with treble, and jumps on each beat.
-- **Radial** shows mirrored spectrum bars around a pulsing core, with a waveform ring inside.
-- **Bars** shows a spectrum with peak caps and reflections, with an oscilloscope line above it.
-- **Terrain** shows a scrolling 3D-style ridge of recent spectrum frames.
-- Click ripples are expanding rings that push nearby particles outward. They grow larger when the music is louder.
+- **Colour field:** six large, soft colour clouds drift slowly across the screen. Each one listens to its own slice of the spectrum and grows and brightens with it. They are painted on a tiny offscreen canvas and stretched to full screen, which blurs them into smooth gradients.
+- **Mood:** the base colour turns slowly around the colour wheel, a little faster when the music is fuller. The whole screen brightens with loudness and lifts gently on strong beats.
+- **Bars:** soft, translucent bars mirrored from the centre, with bass in the middle.
+- **Texture:** faint floating motes, a vignette and fine film grain.
+- **Ripples:** click or drag to send out rings that push the motes aside. They grow larger when the music is louder.

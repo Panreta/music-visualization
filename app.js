@@ -15,9 +15,15 @@
   const trackName = $('trackName');
   const hint = $('hint');
   const dropOverlay = $('dropOverlay');
-  const modeButtons = document.querySelectorAll('.mode');
+  const barsBtn = $('barsBtn');
 
   // ---------- Canvas sizing ----------
+  // The colour field is painted on a tiny offscreen canvas and stretched to
+  // full screen: the upscale blurs it into smooth, dreamy gradients for free.
+  const FIELD_SCALE = 10;
+  const field = document.createElement('canvas');
+  const fctx = field.getContext('2d');
+
   let W = 0, H = 0;
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -28,8 +34,8 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#05060a';
-    ctx.fillRect(0, 0, W, H);
+    field.width = Math.max(16, Math.ceil(W / FIELD_SCALE));
+    field.height = Math.max(16, Math.ceil(H / FIELD_SCALE));
   }
   window.addEventListener('resize', resize);
   resize();
@@ -39,7 +45,7 @@
   audio.preload = 'auto';
   audio.volume = parseFloat(volume.value);
 
-  let actx = null, analyser = null, freqData = null, timeData = null;
+  let actx = null, analyser = null, freqData = null;
   let objectUrl = null;
 
   function initAudio() {
@@ -49,11 +55,10 @@
     const src = actx.createMediaElementSource(audio);
     analyser = actx.createAnalyser();
     analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.8;
+    analyser.smoothingTimeConstant = 0.85;
     src.connect(analyser);
     analyser.connect(actx.destination);
     freqData = new Uint8Array(analyser.frequencyBinCount);
-    timeData = new Uint8Array(analyser.fftSize);
     computeBinEdges();
   }
 
@@ -143,20 +148,19 @@
     if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
   });
 
-  // ---------- Visual mode ----------
-  let mode = 'radial';
-  function setMode(m) {
-    mode = m;
-    modeButtons.forEach((b) => b.classList.toggle('active', b.dataset.mode === m));
+  // ---------- Bars toggle ----------
+  let showBars = true;
+  function setBars(on) {
+    showBars = on;
+    barsBtn.classList.toggle('active', on);
+    barsBtn.setAttribute('aria-pressed', String(on));
   }
-  modeButtons.forEach((b) => b.addEventListener('click', (e) => { setMode(b.dataset.mode); e.currentTarget.blur(); }));
+  barsBtn.addEventListener('click', (e) => { setBars(!showBars); e.currentTarget.blur(); });
 
   window.addEventListener('keydown', (e) => {
     if (e.target === seek || e.target === volume) return;
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-    else if (e.key === '1') setMode('radial');
-    else if (e.key === '2') setMode('bars');
-    else if (e.key === '3') setMode('wave');
+    else if (e.key === 'b' || e.key === 'B') setBars(!showBars);
     else if (e.key === 'f' || e.key === 'F') {
       if (document.fullscreenElement) document.exitFullscreen();
       else document.documentElement.requestFullscreen?.();
@@ -173,18 +177,16 @@
   window.addEventListener('pointermove', scheduleIdle);
 
   // ---------- Analysis ----------
-  const BARS = 96;
-  const bars = new Float32Array(BARS);   // smoothed, 0..1
-  const peaks = new Float32Array(BARS);  // slow-falling caps
+  // Everything is smoothed heavily so the picture drifts rather than flickers.
+  const BARS = 48;                        // per side; bars are mirrored from the centre
+  const bars = new Float32Array(BARS);    // 0..1
   const binEdges = new Int32Array(BARS + 1);
-  const WAVE_PTS = 256;
-  const wave = new Float32Array(WAVE_PTS); // -1..1
 
   function computeBinEdges() {
-    // Log-spaced bands from 30 Hz to 16 kHz so lows and highs get fair screen space
+    // Log-spaced bands from 40 Hz to 14 kHz
     const bins = analyser ? analyser.frequencyBinCount : 1024;
     const nyquist = (actx ? actx.sampleRate : 44100) / 2;
-    const minF = 30, maxF = 16000;
+    const minF = 40, maxF = 14000;
     for (let i = 0; i <= BARS; i++) {
       const f = minF * Math.pow(maxF / minF, i / BARS);
       binEdges[i] = Math.min(bins - 1, Math.max(1, Math.round((f / nyquist) * bins)));
@@ -202,92 +204,219 @@
     return sum / ((hi - lo + 1) * 255);
   }
 
-  const energy = { bass: 0, mid: 0, treble: 0, level: 0 };
+  // `mood` follows the music slowly; it is what drives the colour field
+  const mood = { bass: 0, mid: 0, treble: 0, level: 0 };
   let bassAvg = 0;
   let lastBeat = 0;
-  let beat = 0;      // 1 on a detected beat, decays to 0
-  let hue = 200;     // global colour that drifts with the music
+  let swell = 0;      // gentle brightness lift on strong beats
+  let hue = 220;      // starts in calm blue/indigo
+
+  const follow = (cur, target, up, down, dt) => cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dt));
 
   function analyse(t, dt) {
     const live = analyser && !audio.paused;
-
-    if (live) {
-      analyser.getByteFrequencyData(freqData);
-      analyser.getByteTimeDomainData(timeData);
-    }
+    if (live) analyser.getByteFrequencyData(freqData);
 
     for (let i = 0; i < BARS; i++) {
       let target;
       if (live) {
         const lo = binEdges[i];
         const hi = Math.max(binEdges[i + 1], lo + 1);
-        let max = 0;
-        for (let b = lo; b < hi; b++) if (freqData[b] > max) max = freqData[b];
-        // Gentle tilt so the treble side is not always flat
-        target = Math.min(1, (max / 255) * (0.85 + 0.45 * (i / BARS)));
-        target = target * target * 1.15;
+        let sum = 0;
+        for (let b = lo; b < hi; b++) sum += freqData[b];
+        target = (sum / (hi - lo)) / 255;
+        target = Math.min(1, target * (0.9 + 0.6 * (i / BARS)));
+        target *= target;
       } else {
-        // Calm breathing pattern while nothing is playing
-        target = 0.08 + 0.06 * Math.sin(t * 1.4 + i * 0.22) + 0.04 * Math.sin(t * 0.7 - i * 0.11);
+        target = 0.03 + 0.025 * Math.sin(t * 0.6 + i * 0.18);
       }
-      const k = target > bars[i] ? 0.55 : 0.12;
-      bars[i] += (target - bars[i]) * k;
-      peaks[i] = Math.max(bars[i], peaks[i] - dt * 0.35);
+      bars[i] = follow(bars[i], target, 9, 2.5, dt);
     }
 
-    const step = live ? timeData.length / WAVE_PTS : 0;
-    for (let i = 0; i < WAVE_PTS; i++) {
-      const target = live
-        ? (timeData[Math.floor(i * step)] - 128) / 128
-        : 0.06 * Math.sin(t * 2 + i * 0.12) * Math.sin(t * 0.5 + i * 0.03);
-      wave[i] += (target - wave[i]) * 0.5;
-    }
+    const b = live ? bandEnergy(30, 200) : 0;
+    const m = live ? bandEnergy(200, 2000) : 0;
+    const tr = live ? bandEnergy(2000, 10000) : 0;
+    mood.bass = follow(mood.bass, b, 3, 0.8, dt);
+    mood.mid = follow(mood.mid, m, 1.5, 0.5, dt);
+    mood.treble = follow(mood.treble, tr, 1.5, 0.5, dt);
+    mood.level = mood.bass * 0.5 + mood.mid * 0.35 + mood.treble * 0.15;
 
-    if (live) {
-      const b = bandEnergy(20, 250), m = bandEnergy(250, 2000), tr = bandEnergy(2000, 10000);
-      energy.bass += (b - energy.bass) * 0.5;
-      energy.mid += (m - energy.mid) * 0.4;
-      energy.treble += (tr - energy.treble) * 0.4;
-    } else {
-      energy.bass *= 0.95; energy.mid *= 0.95; energy.treble *= 0.95;
-    }
-    energy.level = energy.bass * 0.5 + energy.mid * 0.35 + energy.treble * 0.15;
-
-    // Simple beat detection: bass jumps well above its running average
-    bassAvg += (energy.bass - bassAvg) * 0.04;
-    if (live && energy.bass > 0.3 && energy.bass > bassAvg * 1.22 && t - lastBeat > 0.28) {
+    bassAvg = follow(bassAvg, b, 0.6, 0.6, dt);
+    if (live && b > 0.35 && b > bassAvg * 1.3 && t - lastBeat > 0.5) {
       lastBeat = t;
-      beat = 1;
-      hue += 28 + Math.random() * 20;
-      onBeat();
+      swell = Math.min(1, swell + 0.5);
     }
-    beat = Math.max(0, beat - dt * 3);
+    swell = Math.max(0, swell - dt * 0.9);
 
-    hue += dt * (6 + energy.treble * 60 + energy.mid * 30);
+    // Slow colour drift; fuller music turns the wheel a little faster
+    hue += dt * (1.5 + mood.level * 10);
   }
 
-  // ---------- Particles ----------
-  const PARTICLES = 180;
-  const particles = [];
-  function resetParticle(p, burst) {
-    const a = Math.random() * Math.PI * 2;
-    const r = Math.random() * Math.min(W, H) * 0.12;
-    p.x = W / 2 + Math.cos(a) * r;
-    p.y = H / 2 + Math.sin(a) * r;
-    const s = (burst ? 2.5 : 0.3) + Math.random() * 1.2;
-    p.vx = Math.cos(a) * s;
-    p.vy = Math.sin(a) * s;
-    p.size = 0.6 + Math.random() * 2.2;
-    p.hueOff = Math.random() * 90 - 45;
-    p.life = 1;
+  // ---------- Colour field ----------
+  // Each cloud listens to its own slice of the spectrum, so different parts of
+  // the screen glow with different parts of the music.
+  const clouds = [
+    { band: [0, 0.2],   hueOff: 0,   size: 0.75, sx: 0.031, sy: 0.023, ph: 0.0 },
+    { band: [0.15, 0.4], hueOff: 35,  size: 0.6,  sx: 0.022, sy: 0.037, ph: 1.7 },
+    { band: [0.3, 0.55], hueOff: -30, size: 0.55, sx: 0.041, sy: 0.019, ph: 3.1 },
+    { band: [0.5, 0.75], hueOff: 60,  size: 0.5,  sx: 0.027, sy: 0.033, ph: 4.4 },
+    { band: [0.7, 1],   hueOff: -55, size: 0.45, sx: 0.036, sy: 0.028, ph: 5.6 },
+    { band: [0, 0.35],  hueOff: 15,  size: 0.65, sx: 0.018, sy: 0.026, ph: 2.4 },
+  ];
+  for (const c of clouds) c.energy = 0;
+
+  function drawField(t, dt) {
+    const fw = field.width, fh = field.height;
+    const span = Math.max(fw, fh);
+
+    // Deep base tone, gently brighter when the music is fuller
+    fctx.globalCompositeOperation = 'source-over';
+    fctx.fillStyle = `hsl(${hue + 10}, 45%, ${7 + mood.level * 7 + swell * 2}%)`;
+    fctx.fillRect(0, 0, fw, fh);
+
+    fctx.globalCompositeOperation = 'screen';
+    for (const c of clouds) {
+      const lo = Math.floor(c.band[0] * BARS), hi = Math.max(lo + 1, Math.floor(c.band[1] * BARS));
+      let sum = 0;
+      for (let i = lo; i < hi; i++) sum += bars[i];
+      c.energy = follow(c.energy, sum / (hi - lo), 2, 0.6, dt);
+
+      const x = fw * (0.5 + 0.42 * Math.sin(t * c.sx + c.ph));
+      const y = fh * (0.5 + 0.42 * Math.cos(t * c.sy + c.ph * 1.3));
+      const r = span * c.size * (0.85 + c.energy * 0.6 + mood.bass * 0.2);
+      const h = hue + c.hueOff + c.energy * 25;
+      const a = 0.34 + c.energy * 0.55 + swell * 0.1;
+
+      const g = fctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `hsla(${h}, 65%, ${45 + c.energy * 15}%, ${a})`);
+      g.addColorStop(0.45, `hsla(${h + 10}, 60%, 35%, ${a * 0.45})`);
+      g.addColorStop(1, `hsla(${h + 20}, 60%, 25%, 0)`);
+      fctx.fillStyle = g;
+      fctx.fillRect(0, 0, fw, fh);
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(field, 0, 0, W, H);
   }
-  for (let i = 0; i < PARTICLES; i++) {
-    const p = {};
-    resetParticle(p);
-    // Scatter the initial batch across the screen
-    p.x = Math.random() * W;
-    p.y = Math.random() * H;
-    particles.push(p);
+
+  // Soft dark edges keep the eye in the middle
+  function drawVignette() {
+    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.6);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.45)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Fine film grain breaks up gradient banding and adds texture
+  const grain = (() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d');
+    const img = g.createImageData(128, 128);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    return ctx.createPattern(c, 'repeat');
+  })();
+  function drawGrain() {
+    ctx.save();
+    ctx.globalAlpha = 0.035;
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.translate((Math.random() * 128) | 0, (Math.random() * 128) | 0);
+    ctx.fillStyle = grain;
+    ctx.fillRect(-128, -128, W + 256, H + 256);
+    ctx.restore();
+  }
+
+  // ---------- Floating motes ----------
+  const MOTES = 60;
+  const motes = [];
+  function resetMote(m, anywhere) {
+    m.x = Math.random() * W;
+    m.y = anywhere ? Math.random() * H : H + 10;
+    m.vx = 0;
+    m.vy = 0;
+    m.rise = 6 + Math.random() * 14;   // px per second
+    m.size = 0.6 + Math.random() * 1.6;
+    m.ph = Math.random() * Math.PI * 2;
+  }
+  for (let i = 0; i < MOTES; i++) { const m = {}; resetMote(m, true); motes.push(m); }
+
+  function updateAndDrawMotes(t, dt) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const m of motes) {
+      // Ripple wavefronts nudge motes outward
+      for (const r of ripples) {
+        if (r.p <= 0) continue;
+        const dx = m.x - r.x, dy = m.y - r.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (Math.abs(d - r.radius) < 30) {
+          const push = (1 - r.p) * r.alpha * 1500 * dt;
+          m.vx += (dx / d) * push;
+          m.vy += (dy / d) * push;
+        }
+      }
+      m.vx *= Math.exp(-2 * dt);
+      m.vy *= Math.exp(-2 * dt);
+      m.x += (m.vx + Math.sin(t * 0.4 + m.ph) * 6) * dt;
+      m.y += (m.vy - m.rise * (1 + mood.level)) * dt;
+      if (m.y < -10 || m.x < -20 || m.x > W + 20 || m.y > H + 20) resetMote(m, false);
+
+      const twinkle = 0.5 + 0.5 * Math.sin(t * 1.2 + m.ph * 3);
+      ctx.fillStyle = `hsla(${hue + 30}, 60%, 85%, ${0.12 + twinkle * (0.15 + mood.treble * 0.5)})`;
+      ctx.beginPath();
+      ctx.arc(m.x, m.y, m.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- Bars ----------
+  // Soft, translucent bars mirrored from the centre: bass in the middle.
+  function drawBars() {
+    const baseline = H * 0.86;
+    const maxH = H * 0.32;
+    const n = BARS * 2;
+    const slot = W / n;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = Math.max(2, slot * 0.45);
+    ctx.globalCompositeOperation = 'screen';
+    for (let p = 0; p < n; p++) {
+      const i = p < BARS ? BARS - 1 - p : p - BARS;
+      const v = bars[i];
+      const h = 2 + v * maxH;
+      const x = (p + 0.5) * slot;
+      ctx.strokeStyle = `hsla(${hue + 20 + i * 1.5}, 55%, 82%, ${0.18 + v * 0.4})`;
+      ctx.beginPath();
+      ctx.moveTo(x, baseline);
+      ctx.lineTo(x, baseline - h);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- Ripples ----------
+  const ripples = [];
+  function addRipple(x, y, opts = {}) {
+    const rings = opts.rings ?? 3;
+    const maxR = opts.maxR ?? 140 + mood.level * 320 + Math.random() * 60;
+    for (let i = 0; i < rings; i++) {
+      ripples.push({
+        x, y,
+        p: -i * 0.12,                // negative = waiting to start (staggered rings)
+        maxR: maxR * (1 - i * 0.18),
+        duration: opts.duration ?? 1.6,
+        width: (opts.width ?? 4) * (1 - i * 0.25),
+        alpha: opts.alpha ?? 1,
+        hue: hue + 30 + i * 25,
+        radius: 0,
+      });
+    }
   }
 
   const sparks = [];
@@ -299,47 +428,21 @@
     }
   }
 
-  function onBeat() {
-    for (let i = 0; i < 18; i++) resetParticle(particles[(Math.random() * PARTICLES) | 0], true);
-    if (mode === 'radial') {
-      addRipple(W / 2, H / 2, { maxR: Math.min(W, H) * 0.55, width: 2, alpha: 0.35, duration: 1.2, rings: 1 });
-    }
-  }
-
-  // ---------- Ripples ----------
-  const ripples = [];
-  function addRipple(x, y, opts = {}) {
-    const rings = opts.rings ?? 3;
-    const maxR = opts.maxR ?? 140 + energy.level * 320 + Math.random() * 60;
-    for (let i = 0; i < rings; i++) {
-      ripples.push({
-        x, y,
-        p: -i * 0.12,                // negative = waiting to start (staggered rings)
-        maxR: maxR * (1 - i * 0.18),
-        duration: opts.duration ?? 1.5,
-        width: (opts.width ?? 4) * (1 - i * 0.25),
-        alpha: opts.alpha ?? 1,
-        hue: hue + i * 25,
-        radius: 0,
-      });
-    }
-  }
-
   let pointerDown = false;
   let lastDragRipple = 0;
   canvas.addEventListener('pointerdown', (e) => {
     pointerDown = true;
     canvas.setPointerCapture(e.pointerId);
     addRipple(e.clientX, e.clientY);
-    spawnSparks(e.clientX, e.clientY, 22, hue, 1 + energy.level * 1.5);
+    spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!pointerDown) return;
     const now = performance.now();
     if (now - lastDragRipple > 70) {
       lastDragRipple = now;
-      addRipple(e.clientX, e.clientY, { rings: 1, maxR: 70 + energy.level * 140, width: 2.5, duration: 1 });
-      spawnSparks(e.clientX, e.clientY, 4, hue, 0.6);
+      addRipple(e.clientX, e.clientY, { rings: 1, maxR: 70 + mood.level * 140, width: 2.5, duration: 1.1 });
+      spawnSparks(e.clientX, e.clientY, 4, hue + 30, 0.6);
     }
   });
   const endPointer = () => { pointerDown = false; };
@@ -361,8 +464,8 @@
       // Soft flash at the touch point
       if (r.p < 0.35 && r.alpha > 0.5) {
         const g = ctx.createRadialGradient(r.x, r.y, 0, r.x, r.y, r.radius);
-        g.addColorStop(0, `hsla(${r.hue}, 100%, 75%, ${0.25 * (1 - r.p / 0.35)})`);
-        g.addColorStop(1, `hsla(${r.hue}, 100%, 60%, 0)`);
+        g.addColorStop(0, `hsla(${r.hue}, 90%, 75%, ${0.22 * (1 - r.p / 0.35)})`);
+        g.addColorStop(1, `hsla(${r.hue}, 90%, 60%, 0)`);
         ctx.fillStyle = g;
         ctx.beginPath();
         ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
@@ -370,222 +473,31 @@
       }
 
       ctx.lineWidth = r.width * (1 - r.p) + 0.5;
-      ctx.strokeStyle = `hsla(${r.hue}, 95%, 65%, ${fade})`;
+      ctx.strokeStyle = `hsla(${r.hue}, 85%, 72%, ${fade})`;
       ctx.beginPath();
       ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
       ctx.stroke();
 
       ctx.lineWidth = 1;
-      ctx.strokeStyle = `hsla(${r.hue + 40}, 95%, 80%, ${fade * 0.5})`;
+      ctx.strokeStyle = `hsla(${r.hue + 40}, 85%, 85%, ${fade * 0.5})`;
       ctx.beginPath();
       ctx.arc(r.x, r.y, r.radius * 0.82, 0, Math.PI * 2);
       ctx.stroke();
     }
-    ctx.globalCompositeOperation = 'source-over';
-  }
 
-  function updateAndDrawParticles(dt) {
-    const speed = 0.6 + energy.level * 3.5 + beat * 3;
     const f = dt * 60;
-    ctx.globalCompositeOperation = 'lighter';
-    for (const p of particles) {
-      // Ripple wavefronts push particles outward
-      for (const r of ripples) {
-        if (r.p <= 0) continue;
-        const dx = p.x - r.x, dy = p.y - r.y;
-        const d = Math.hypot(dx, dy) || 1;
-        if (Math.abs(d - r.radius) < 24) {
-          const push = (1 - r.p) * 1.8 * r.alpha;
-          p.vx += (dx / d) * push;
-          p.vy += (dy / d) * push;
-        }
-      }
-      p.vx *= 0.985; p.vy *= 0.985;
-      p.x += p.vx * speed * f;
-      p.y += p.vy * speed * f;
-      p.life -= dt * 0.08;
-      if (p.life <= 0 || p.x < -20 || p.x > W + 20 || p.y < -20 || p.y > H + 20) { resetParticle(p); continue; }
-
-      const size = p.size * (1 + energy.treble * 1.5 + beat * 0.8);
-      ctx.fillStyle = `hsla(${hue + p.hueOff}, 90%, 70%, ${0.35 + 0.5 * p.life * (0.4 + energy.level)})`;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
     for (let i = sparks.length - 1; i >= 0; i--) {
       const s = sparks[i];
       s.vx *= 0.95; s.vy *= 0.95;
       s.x += s.vx * f; s.y += s.vy * f;
       s.life -= dt * 1.3;
       if (s.life <= 0) { sparks.splice(i, 1); continue; }
-      ctx.fillStyle = `hsla(${s.hue}, 100%, 75%, ${s.life})`;
+      ctx.fillStyle = `hsla(${s.hue}, 90%, 78%, ${s.life})`;
       ctx.beginPath();
       ctx.arc(s.x, s.y, s.size * s.life + 0.3, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
-  }
-
-  // ---------- Background ----------
-  function drawBackground(fadeAlpha) {
-    // Translucent fill = motion trails; its hue drifts with the music
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = `hsla(${hue}, 55%, ${3 + energy.bass * 5}%, ${fadeAlpha})`;
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.globalCompositeOperation = 'lighter';
-    const R = Math.max(W, H) * 0.7;
-    const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, R);
-    g.addColorStop(0, `hsla(${hue + 30}, 85%, 45%, ${0.025 + energy.bass * 0.05 + beat * 0.04})`);
-    g.addColorStop(0.5, `hsla(${hue + 90}, 80%, 35%, ${0.012 + energy.mid * 0.03})`);
-    g.addColorStop(1, 'hsla(0, 0%, 0%, 0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-    ctx.globalCompositeOperation = 'source-over';
-  }
-
-  // ---------- Mode: Radial ----------
-  let rotation = 0;
-  function drawRadial(dt) {
-    const cx = W / 2, cy = H / 2;
-    const unit = Math.min(W, H);
-    const base = unit * 0.15 * (1 + energy.bass * 0.3 + beat * 0.06);
-    rotation += dt * (0.05 + energy.mid * 0.6);
-
-    // Core glow
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, base * 1.4);
-    g.addColorStop(0, `hsla(${hue}, 90%, 65%, ${0.18 + energy.bass * 0.35})`);
-    g.addColorStop(1, `hsla(${hue}, 90%, 50%, 0)`);
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, cy, base * 1.4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Mirrored spectrum bars around the circle
-    ctx.lineCap = 'round';
-    ctx.lineWidth = Math.max(2, ((Math.PI * 2 * base) / (BARS * 2)) * 0.55);
-    for (let i = 0; i < BARS; i++) {
-      const v = bars[i];
-      const len = 3 + v * unit * 0.3;
-      ctx.strokeStyle = `hsla(${hue + (i / BARS) * 150}, 90%, ${50 + v * 25}%, ${0.55 + v * 0.45})`;
-      for (const side of [-1, 1]) {
-        const a = -Math.PI / 2 + rotation + side * ((i + 0.5) / BARS) * Math.PI;
-        const cos = Math.cos(a), sin = Math.sin(a);
-        ctx.beginPath();
-        ctx.moveTo(cx + cos * (base + 4), cy + sin * (base + 4));
-        ctx.lineTo(cx + cos * (base + 4 + len), cy + sin * (base + 4 + len));
-        ctx.stroke();
-      }
-    }
-
-    // Waveform ring inside the circle
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = `hsla(${hue + 180}, 90%, 80%, 0.85)`;
-    ctx.beginPath();
-    for (let i = 0; i <= WAVE_PTS; i++) {
-      const idx = i % WAVE_PTS;
-      const a = (idx / WAVE_PTS) * Math.PI * 2 - rotation * 0.5;
-      const r = base * 0.78 + wave[idx] * base * 0.45;
-      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.stroke();
-    ctx.globalCompositeOperation = 'source-over';
-  }
-
-  // ---------- Mode: Bars ----------
-  function drawBars() {
-    const baseline = H * 0.7;
-    const gap = 2;
-    const bw = W / BARS;
-    const maxH = H * 0.5;
-
-    ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < BARS; i++) {
-      const v = bars[i];
-      const h = Math.max(2, v * maxH);
-      const x = i * bw + gap / 2;
-      const w = bw - gap;
-      const c = hue + (i / BARS) * 160;
-
-      const grad = ctx.createLinearGradient(0, baseline - h, 0, baseline);
-      grad.addColorStop(0, `hsla(${c}, 95%, 70%, 0.95)`);
-      grad.addColorStop(1, `hsla(${c + 30}, 90%, 45%, 0.6)`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, baseline - h, w, h);
-
-      // Reflection
-      ctx.fillStyle = `hsla(${c + 30}, 90%, 50%, 0.12)`;
-      ctx.fillRect(x, baseline + 3, w, h * 0.35);
-
-      // Peak cap
-      ctx.fillStyle = `hsla(${c}, 100%, 85%, 0.9)`;
-      ctx.fillRect(x, baseline - peaks[i] * maxH - 5, w, 2);
-    }
-
-    // Oscilloscope line across the top
-    const midY = H * 0.24;
-    const amp = H * 0.12 * (1 + energy.level);
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = `hsla(${hue + 200}, 95%, 75%, 0.9)`;
-    ctx.shadowColor = `hsla(${hue + 200}, 95%, 60%, 1)`;
-    ctx.shadowBlur = 12;
-    ctx.beginPath();
-    for (let i = 0; i < WAVE_PTS; i++) {
-      const x = (i / (WAVE_PTS - 1)) * W;
-      const y = midY + wave[i] * amp;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.globalCompositeOperation = 'source-over';
-  }
-
-  // ---------- Mode: Terrain (spectrum history) ----------
-  const ROWS = 36;
-  const history = [];
-  let historyTick = 0;
-  function drawTerrain(dt) {
-    historyTick += dt;
-    if (historyTick > 1 / 30) {
-      historyTick = 0;
-      history.unshift(Float32Array.from(bars));
-      if (history.length > ROWS) history.pop();
-    }
-
-    const front = H * 0.8;
-    const depth = H * 0.55;
-    // Draw back-to-front; each row hides the ones behind it
-    for (let k = history.length - 1; k >= 0; k--) {
-      const row = history[k];
-      const z = k / ROWS;
-      const scale = 1 - z * 0.55;
-      const y0 = front - z * depth;
-      const width = W * 0.92 * scale;
-      const x0 = (W - width) / 2;
-      const amp = H * 0.32 * scale;
-      const n = BARS * 2;
-
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      for (let p = 0; p < n; p++) {
-        // Symmetric: bass in the middle, treble on the edges
-        const i = p < BARS ? BARS - 1 - p : p - BARS;
-        const x = x0 + (p / (n - 1)) * width;
-        const edge = Math.sin((p / (n - 1)) * Math.PI); // taper to zero at the sides
-        ctx.lineTo(x, y0 - row[i] * amp * (0.25 + 0.75 * edge));
-      }
-      ctx.lineTo(x0 + width, y0);
-      ctx.closePath();
-      ctx.fillStyle = `hsl(${hue}, 50%, 4%)`;
-      ctx.fill();
-      ctx.lineWidth = k === 0 ? 2.5 : 1.5;
-      ctx.strokeStyle = `hsla(${hue + k * 5}, 90%, ${65 - z * 20}%, ${1 - z * 0.85})`;
-      ctx.stroke();
-    }
   }
 
   // ---------- Main loop ----------
@@ -597,20 +509,19 @@
     const t = now / 1000;
 
     analyse(t, dt);
-    drawBackground(mode === 'wave' ? 0.5 : 0.22);
-
-    updateAndDrawParticles(dt);
-    if (mode === 'radial') drawRadial(dt);
-    else if (mode === 'bars') drawBars();
-    else drawTerrain(dt);
+    drawField(t, dt);
+    updateAndDrawMotes(t, dt);
+    if (showBars) drawBars();
     updateAndDrawRipples(dt);
+    drawVignette();
+    drawGrain();
 
     if (!seeking && isFinite(audio.duration) && audio.duration > 0) {
       seek.value = Math.round((audio.currentTime / audio.duration) * 1000);
       curTime.textContent = fmt(audio.currentTime);
     }
-    if (++frame % 6 === 0) {
-      document.documentElement.style.setProperty('--accent', `hsl(${hue % 360} 90% 65%)`);
+    if (++frame % 10 === 0) {
+      document.documentElement.style.setProperty('--accent', `hsl(${(hue + 30) % 360} 70% 72%)`);
     }
 
     requestAnimationFrame(loop);

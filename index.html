@@ -12,7 +12,7 @@
   <div id="hint" class="hint">
     <h1>Music Visualizer</h1>
     <p>Drop an MP3 anywhere, or press <strong>Choose MP3</strong> below.</p>
-    <p class="sub">Click or drag on the screen to make ripples.</p>
+    <p class="sub">Sit back. Click or drag on the screen to make ripples.</p>
   </div>
 
   <div id="dropOverlay" class="drop-overlay"><span>Drop to play</span></div>
@@ -38,11 +38,10 @@
       </div>
     </div>
 
-    <div class="modes" role="group" aria-label="Visual style">
-      <button class="mode active" data-mode="radial" title="Radial (1)">Radial</button>
-      <button class="mode" data-mode="bars" title="Bars (2)">Bars</button>
-      <button class="mode" data-mode="wave" title="Terrain (3)">Terrain</button>
-    </div>
+    <button id="barsBtn" class="btn toggle active" aria-pressed="true" title="Show or hide bars (B)">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M4 20h3V10H4zm6.5 0h3V4h-3zM17 20h3v-7h-3z"/></svg>
+      <span>Bars</span>
+    </button>
 
     <label class="volume" title="Volume">
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
