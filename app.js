@@ -160,6 +160,7 @@
     if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'b' || e.key === 'B') setBars(!showBars);
     else if (e.key === 's' || e.key === 'S') nextScene();
+    else if ((e.key === 'm' || e.key === 'M') && scene === 'brownian') pickBrownianModel();
     else if (e.key === 'f' || e.key === 'F') {
       if (document.fullscreenElement) document.exitFullscreen();
       else document.documentElement.requestFullscreen?.();
@@ -255,9 +256,11 @@
         addVortex(W * (0.15 + Math.random() * 0.7), H * (0.15 + Math.random() * 0.7),
           sign * (1.5 + mood.level * 2.5), 120 + Math.random() * 120);
         arrowFlash = 1;
-      } else {
+      } else if (scene === 'dust') {
         flashFireflies(0.35 + mood.level * 0.3);
         if (Math.random() < 0.5) spawnShootingStar();
+      } else {
+        brownKick = 1;   // temperature spike
       }
     }
     swell = Math.max(0, swell - dt * 0.9);
@@ -941,13 +944,223 @@
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // ---------- Scene: Brownian motion ----------
+  // A particle system driven by stochastic differential equations. Each time
+  // the scene appears, one model is picked at random. Every particle is
+  // stepped with Euler–Maruyama: X += drift·dt + σ·√dt·N(0,1). Their fading
+  // trails draw the random paths. The music sets the temperature (the noise
+  // strength σ), beats kick it, and a click releases a burst of particles
+  // that diffuse out from that point.
+  const BROWN_N = 1200;
+  const BROWN_GROUPS = 6;
+  const btrail = document.createElement('canvas');
+  const bctx = btrail.getContext('2d');
+  const brown = [];
+  const modelLabel = $('modelLabel');
+  let brownModel = null;
+  let brownKick = 0;
+
+  // Standard normal sample (Box–Muller)
+  function gauss() {
+    let u = 0;
+    while (u === 0) u = Math.random();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * Math.random());
+  }
+
+  const unit = () => Math.min(W, H);
+
+  // Each model: init(p) places a particle, place(p, x, y) moves it to a point,
+  // step(p, dt, temp) advances it and returns false if it jumped (so no trail
+  // segment is drawn across the screen).
+  const BROWN_MODELS = [
+    {
+      name: 'Wiener process (pure Brownian motion)',
+      eq: 'dX = σ dW',
+      init(p) { p.x = Math.random() * W; p.y = Math.random() * H; },
+      place(p, x, y) { p.x = x; p.y = y; },
+      step(p, dt, temp) {
+        const s = unit() * 0.07 * temp * Math.sqrt(dt);
+        p.x += s * gauss();
+        p.y += s * gauss();
+        // The screen wraps around like a torus
+        let jumped = false;
+        if (p.x < 0) { p.x += W; jumped = true; } else if (p.x > W) { p.x -= W; jumped = true; }
+        if (p.y < 0) { p.y += H; jumped = true; } else if (p.y > H) { p.y -= H; jumped = true; }
+        return !jumped;
+      },
+    },
+    {
+      name: 'Ornstein–Uhlenbeck process',
+      eq: 'dX = θ(μ − X) dt + σ dW',
+      anchors: [],
+      prepare(t) {
+        // Four drifting centres μ that the particles are pulled toward
+        this.anchors = [0, 1, 2, 3].map((k) => [
+          W * (0.5 + 0.32 * Math.sin(t * 0.07 * (k + 1) + k * 1.7)),
+          H * (0.5 + 0.3 * Math.cos(t * 0.05 * (k + 2) + k)),
+        ]);
+      },
+      init(p) { p.k = (Math.random() * 4) | 0; p.x = Math.random() * W; p.y = Math.random() * H; },
+      place(p, x, y) { p.x = x; p.y = y; },
+      step(p, dt, temp) {
+        const [mx, my] = this.anchors[p.k];
+        const theta = 0.9;
+        const s = unit() * 0.11 * temp * Math.sqrt(dt);
+        p.x += theta * (mx - p.x) * dt + s * gauss();
+        p.y += theta * (my - p.y) * dt + s * gauss();
+        return true;
+      },
+    },
+    {
+      name: 'Geometric Brownian motion (radial)',
+      eq: 'dR = μR dt + σR dW',
+      init(p) {
+        p.r = unit() * (0.01 + Math.random() * 0.05);
+        p.a = Math.random() * Math.PI * 2;
+        p.x = W / 2 + Math.cos(p.a) * p.r;
+        p.y = H / 2 + Math.sin(p.a) * p.r;
+      },
+      place(p, x, y) {
+        p.r = Math.max(2, Math.hypot(x - W / 2, y - H / 2));
+        p.a = Math.atan2(y - H / 2, x - W / 2);
+        p.x = x; p.y = y;
+      },
+      step(p, dt, temp) {
+        const mu = 0.15 + mood.bass * 0.4;
+        const sigma = 0.35 + 0.15 * temp;
+        // Exact GBM step: R ← R·exp((μ − σ²/2)dt + σ√dt·N)
+        p.r *= Math.exp((mu - sigma * sigma / 2) * dt + sigma * Math.sqrt(dt) * gauss());
+        p.a += 0.5 * Math.sqrt(dt) * gauss();
+        if (p.r > Math.hypot(W, H) / 2 || p.r < 0.5) { this.init(p); return false; }
+        p.x = W / 2 + Math.cos(p.a) * p.r;
+        p.y = H / 2 + Math.sin(p.a) * p.r;
+        return true;
+      },
+    },
+    {
+      name: 'Langevin dynamics in a double-well potential',
+      eq: 'dV = −γV dt − ∇U(X) dt + σ dW,   U = k(x² − 1)²',
+      // Works in units where the two wells sit at u = ±1
+      toScreen(p) { p.x = W / 2 + p.u * W * 0.28; p.y = H / 2 + p.v * H * 0.25; },
+      init(p) {
+        p.u = (Math.random() < 0.5 ? -1 : 1) + gauss() * 0.15;
+        p.v = gauss() * 0.3;
+        p.du = 0; p.dv = 0;
+        this.toScreen(p);
+      },
+      place(p, x, y) {
+        p.u = (x - W / 2) / (W * 0.28);
+        p.v = (y - H / 2) / (H * 0.25);
+        p.du = 0; p.dv = 0;
+        p.x = x; p.y = y;
+      },
+      step(p, dt, temp) {
+        const gamma = 1.2, k = 2.5, k2 = 3;
+        const s = 0.9 * temp * Math.sqrt(dt);
+        p.du += (-gamma * p.du - 4 * k * p.u * (p.u * p.u - 1)) * dt + s * gauss();
+        p.dv += (-gamma * p.dv - k2 * p.v) * dt + s * gauss();
+        p.u += p.du * dt;
+        p.v += p.dv * dt;
+        this.toScreen(p);
+        return true;
+      },
+    },
+    {
+      name: 'Rotating Ornstein–Uhlenbeck (stochastic vortex)',
+      eq: 'dX = (−θX + ωJX) dt + σ dW',
+      init(p) { p.x = W / 2 + gauss() * unit() * 0.18; p.y = H / 2 + gauss() * unit() * 0.18; },
+      place(p, x, y) { p.x = x; p.y = y; },
+      step(p, dt, temp) {
+        // Weak noise and a strong spin, so the swirl shows through the jitter
+        const theta = 0.22, omega = 1.4 + mood.mid * 2.5;
+        const s = unit() * 0.05 * temp * Math.sqrt(dt);
+        const x = p.x - W / 2, y = p.y - H / 2;
+        p.x += (-theta * x - omega * y) * dt + s * gauss();
+        p.y += (-theta * y + omega * x) * dt + s * gauss();
+        return true;
+      },
+    },
+  ];
+
+  function resizeBrownTrail() {
+    btrail.width = Math.max(1, Math.round(W));
+    btrail.height = Math.max(1, Math.round(H));
+    if (brownModel) for (const p of brown) brownModel.init(p);
+  }
+  window.addEventListener('resize', resizeBrownTrail);
+  resizeBrownTrail();
+
+  // Pick a model at random (never the same one twice in a row) and restart
+  function pickBrownianModel() {
+    let m;
+    do m = BROWN_MODELS[(Math.random() * BROWN_MODELS.length) | 0];
+    while (m === brownModel && BROWN_MODELS.length > 1);
+    brownModel = m;
+    brown.length = 0;
+    for (let i = 0; i < BROWN_N; i++) {
+      const p = { g: i % BROWN_GROUPS };
+      m.init(p);
+      brown.push(p);
+    }
+    bctx.clearRect(0, 0, btrail.width, btrail.height);
+    modelLabel.innerHTML = `<strong>${m.name}</strong><span>${m.eq}</span>`;
+  }
+
+  // Release a burst of particles at a point: they spread out like heat
+  function burstBrownian(x, y) {
+    if (!brownModel) return;
+    for (let n = 0; n < 120; n++) brownModel.place(brown[(Math.random() * brown.length) | 0], x, y);
+  }
+
+  function updateAndDrawBrownian(t, dt) {
+    if (!brownModel || dt <= 0) {
+      ctx.drawImage(btrail, 0, 0, W, H);
+      return;
+    }
+    const live = analyser && !audio.paused;
+    const h = hue + tone * 140;
+    brownKick = Math.max(0, brownKick - dt * 1.5);
+    const temp = 1 + mood.level * 2 + brownKick * 2;
+    brownModel.prepare?.(t);
+
+    bctx.globalCompositeOperation = 'destination-out';
+    bctx.fillStyle = `rgba(0, 0, 0, ${Math.min(1, 0.05 * dt * 60)})`;
+    bctx.fillRect(0, 0, btrail.width, btrail.height);
+    bctx.globalCompositeOperation = 'lighter';
+    bctx.lineCap = 'round';
+    bctx.lineWidth = 1.1;
+
+    for (let g = 0; g < BROWN_GROUPS; g++) {
+      const lo = Math.floor((g / BROWN_GROUPS) * BARS), hi = Math.floor(((g + 1) / BROWN_GROUPS) * BARS);
+      let sum = 0;
+      for (let i = lo; i < hi; i++) sum += bars[i];
+      const e = live ? sum / (hi - lo) : 0.05;
+      bctx.strokeStyle = `hsla(${h - 45 + g * 18}, 85%, ${62 + e * 20}%, ${0.4 + e * 0.5})`;
+      bctx.beginPath();
+      for (let i = g; i < brown.length; i += BROWN_GROUPS) {
+        const p = brown[i];
+        const x0 = p.x, y0 = p.y;
+        if (brownModel.step(p, dt, temp)) {
+          bctx.moveTo(x0, y0);
+          bctx.lineTo(p.x, p.y);
+        }
+      }
+      bctx.stroke();
+    }
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(btrail, 0, 0, W, H);
+  }
+
   // ---------- Scene selection ----------
   // Each page load and each new song picks one of the backgrounds at random
-  const SCENES = ['glass', 'flow', 'dust'];
+  const SCENES = ['glass', 'flow', 'dust', 'brownian'];
   let scene = 'glass';
   function setScene(name) {
     scene = name;
     if (name === 'flow') tctx.clearRect(0, 0, trail.width, trail.height);
+    if (name === 'brownian') pickBrownianModel();
+    modelLabel.classList.toggle('show', name === 'brownian');
   }
   function pickRandomScene() {
     setScene(SCENES[(Math.random() * SCENES.length) | 0]);
@@ -1074,7 +1287,7 @@
       // Drop a strong swirl into the vector field where you clicked
       addVortex(e.clientX, e.clientY, (Math.random() < 0.5 ? -1 : 1) * 4, 160);
       arrowFlash = 1;
-    } else {
+    } else if (scene === 'dust') {
       // Nearby fireflies light up and scatter
       for (const f of fireflies) {
         const dx = f.x - e.clientX, dy = f.y - e.clientY;
@@ -1085,6 +1298,8 @@
           f.vy += (dy / d) * 120;
         }
       }
+    } else {
+      burstBrownian(e.clientX, e.clientY);
     }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
@@ -1170,8 +1385,10 @@
       updateAndDrawRibbons(t, dt);
     } else if (scene === 'flow') {
       updateAndDrawFlow(t, dt);
-    } else {
+    } else if (scene === 'dust') {
       updateAndDrawDust(t, dt);
+    } else {
+      updateAndDrawBrownian(t, dt);
     }
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
