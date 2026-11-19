@@ -6,8 +6,7 @@
   const ctx = canvas.getContext('2d');
   const fileInput = $('fileInput');
   const playBtn = $('playBtn');
-  const iconPlay = $('iconPlay');
-  const iconPause = $('iconPause');
+  const playIcon = $('playIcon');
   const seek = $('seek');
   const volume = $('volume');
   const curTime = $('curTime');
@@ -98,11 +97,14 @@
     return m + ':' + String(s).padStart(2, '0');
   }
 
+  // One icon whose shape is redrawn, rather than two icons shown and hidden
+  const PLAY_PATH = 'M8 5v14l11-7z';
+  const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
+  let shownPlaying = false;
   function syncPlayIcon() {
     const playing = !audio.paused;
-    // SVG elements ignore the .hidden property, so set the attribute itself
-    iconPlay.toggleAttribute('hidden', playing);
-    iconPause.toggleAttribute('hidden', !playing);
+    playIcon.setAttribute('d', playing ? PAUSE_PATH : PLAY_PATH);
+    shownPlaying = playing;
     playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     scheduleIdle();
   }
@@ -239,7 +241,8 @@
     if (live && b > 0.2 && b > bassAvg * 1.15 && t - lastBeat > 0.35) {
       lastBeat = t;
       swell = Math.min(1, swell + 0.5);
-      sparkleEdges(4 + Math.round(mood.level * 8));
+      sparkleEdges(6 + Math.round(mood.level * 10));
+      spawnPulse();
     }
     swell = Math.max(0, swell - dt * 0.9);
 
@@ -290,112 +293,271 @@
     ctx.restore();
   }
 
-  // ---------- Geometry ----------
-  // Outlined shapes scattered across the screen. Their edges light up at
-  // random: more often when their slice of the music is loud, in bursts on
-  // beats, and wherever a ripple passes over a corner.
-  const shapes = [];
-  function layoutShapes() {
-    shapes.length = 0;
-    const cols = Math.max(3, Math.round(W / 260));
-    const rows = Math.max(2, Math.round(H / 260));
+  // ---------- Geometry: Voronoi diagram ----------
+  // Seed points drift slowly; every frame the screen is split into the cells
+  // closest to each seed. Each seed listens to its own part of the spectrum.
+  // Cell walls light up at random with the music, in bursts on beats, and
+  // where a ripple's wavefront crosses them.
+  const sites = [];
+  const edgeGlow = new Map();   // key for a pair of neighbouring seeds -> glow 0..1
+  let cells = [];
+
+  function layoutSites() {
+    sites.length = 0;
+    edgeGlow.clear();
+    const cols = Math.max(4, Math.round(W / 210));
+    const rows = Math.max(3, Math.round(H / 210));
     const cw = W / cols, ch = H / rows;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        if (Math.random() < 0.25) continue;   // leave some gaps so it doesn't look like a grid
-        const sides = [3, 4, 5, 6][(Math.random() * 4) | 0];
-        shapes.push({
-          x: (c + 0.2 + Math.random() * 0.6) * cw,
-          y: (r + 0.2 + Math.random() * 0.6) * ch,
-          size: Math.min(cw, ch) * (0.18 + Math.random() * 0.22),
-          sides,
-          rot: Math.random() * Math.PI * 2,
-          spin: (Math.random() - 0.5) * 0.12,
+        sites.push({
+          hx: (c + 0.15 + Math.random() * 0.7) * cw,   // home position
+          hy: (r + 0.15 + Math.random() * 0.7) * ch,
+          amp: Math.min(cw, ch) * 0.4,
+          sx: 0.05 + Math.random() * 0.08,
+          sy: 0.05 + Math.random() * 0.08,
           ph: Math.random() * Math.PI * 2,
-          band: Math.random(),               // which part of the spectrum it listens to: 0 = bass, 1 = treble
-          glow: new Float32Array(sides),     // brightness of each edge, 0..1
-          pts: [],
+          band: Math.random(),                         // 0 = bass, 1 = treble
+          energy: 0,
+          ox: 0, oy: 0, vx: 0, vy: 0,                  // offset from ripple pushes
+          x: 0, y: 0,
         });
       }
     }
   }
-  window.addEventListener('resize', layoutShapes);
-  layoutShapes();
+  window.addEventListener('resize', layoutSites);
+  layoutSites();
 
-  function lightEdge(s, e, v = 1) {
-    if (v > s.glow[e]) s.glow[e] = v;
+  const pairKey = (i, j) => (i < j ? i * 4096 + j : j * 4096 + i);
+
+  // Sutherland–Hodgman clip of a polygon against the half-plane nx*x + ny*y <= c.
+  // Every vertex carries `e`, the neighbour that made its outgoing edge (-1 = screen border).
+  function clipPoly(poly, nx, ny, c, label) {
+    const out = [];
+    const n = poly.length;
+    for (let k = 0; k < n; k++) {
+      const a = poly[k], b = poly[(k + 1) % n];
+      const da = nx * a.x + ny * a.y - c;
+      const db = nx * b.x + ny * b.y - c;
+      if (da <= 0) out.push(a);
+      if ((da <= 0) !== (db <= 0)) {
+        const t = da / (da - db);
+        out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, e: da <= 0 ? label : a.e });
+      }
+    }
+    return out;
+  }
+
+  function computeCells() {
+    const m = 4;
+    cells = sites.map((s, i) => {
+      let poly = [
+        { x: -m, y: -m, e: -1 }, { x: W + m, y: -m, e: -1 },
+        { x: W + m, y: H + m, e: -1 }, { x: -m, y: H + m, e: -1 },
+      ];
+      for (let j = 0; j < sites.length && poly.length; j++) {
+        if (j === i) continue;
+        const o = sites[j];
+        const nx = o.x - s.x, ny = o.y - s.y;
+        const c = nx * (s.x + o.x) / 2 + ny * (s.y + o.y) / 2;
+        poly = clipPoly(poly, nx, ny, c, j);
+      }
+      return poly;
+    });
+  }
+
+  // Light a random wall of a random cell (or of cell `i`)
+  function lightRandomEdge(i, v = 1) {
+    const cell = cells[i];
+    if (!cell || !cell.length) return;
+    const k = (Math.random() * cell.length) | 0;
+    const j = cell[k].e;
+    if (j < 0) return;
+    const key = pairKey(i, j);
+    if (v > (edgeGlow.get(key) || 0)) edgeGlow.set(key, v);
   }
 
   function sparkleEdges(n) {
-    for (let i = 0; i < n && shapes.length; i++) {
-      const s = shapes[(Math.random() * shapes.length) | 0];
-      lightEdge(s, (Math.random() * s.sides) | 0);
-    }
+    for (let k = 0; k < n && sites.length; k++) lightRandomEdge((Math.random() * sites.length) | 0);
   }
 
-  function updateAndDrawShapes(t, dt) {
+  function updateAndDrawVoronoi(t, dt) {
     const live = analyser && !audio.paused;
     const h = hue + tone * 140;
+
+    // Move seeds: slow drift, wider when the music is fuller, plus ripple pushes
+    for (const s of sites) {
+      s.vx *= Math.exp(-1.5 * dt); s.vy *= Math.exp(-1.5 * dt);
+      s.ox = (s.ox + s.vx * dt) * Math.exp(-0.6 * dt);
+      s.oy = (s.oy + s.vy * dt) * Math.exp(-0.6 * dt);
+      const wander = 0.6 + mood.level * 0.6;
+      s.x = s.hx + Math.sin(t * s.sx + s.ph) * s.amp * wander + s.ox;
+      s.y = s.hy + Math.cos(t * s.sy + s.ph * 1.7) * s.amp * wander + s.oy;
+      s.energy = follow(s.energy, bars[Math.min(BARS - 1, (s.band * BARS) | 0)], 4, 1.2, dt);
+    }
+    computeCells();
+
+    // Random lighting: the louder a seed's band, the more often its walls glow
+    for (let i = 0; i < sites.length; i++) {
+      const rate = live ? sites[i].energy * 3 + mood.level * 2 : 0.12;
+      if (Math.random() < rate * dt) lightRandomEdge(i, live ? 0.6 + Math.min(0.4, sites[i].energy) : 0.5);
+    }
+
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    for (const s of shapes) {
-      s.rot += s.spin * dt * (1 + mood.level * 2);
-      const bob = Math.sin(t * 0.3 + s.ph) * 6;
-      for (let k = 0; k < s.sides; k++) {
-        const a = s.rot + (k / s.sides) * Math.PI * 2;
-        s.pts[k] = [s.x + Math.cos(a) * s.size, s.y + bob + Math.sin(a) * s.size];
-      }
+    // Cells glow faintly with their band's energy
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      const e = sites[i].energy;
+      if (cell.length < 3 || e < 0.02) continue;
+      ctx.fillStyle = `hsla(${h + 20 + sites[i].band * 80}, 70%, 60%, ${Math.min(0.12, e * 0.18)})`;
+      ctx.beginPath();
+      ctx.moveTo(cell[0].x, cell[0].y);
+      for (let k = 1; k < cell.length; k++) ctx.lineTo(cell[k].x, cell[k].y);
+      ctx.closePath();
+      ctx.fill();
+    }
 
-      // Random edges light up; the louder this shape's band, the more often
-      if (live) {
-        const v = bars[Math.min(BARS - 1, (s.band * BARS) | 0)];
-        if (Math.random() < (v * 3 + mood.level * 2) * dt) lightEdge(s, (Math.random() * s.sides) | 0, 0.6 + Math.min(0.4, v));
-      } else if (Math.random() < 0.15 * dt) {
-        lightEdge(s, (Math.random() * s.sides) | 0, 0.5);
-      }
+    // Walls: each shared wall is drawn once, from the lower-numbered cell
+    const restAlpha = 0.16 + mood.level * 0.12;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = `hsla(${h + 30}, 50%, 88%, ${restAlpha})`;
+    ctx.beginPath();
+    const lit = [];
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      for (let k = 0; k < cell.length; k++) {
+        const j = cell[k].e;
+        if (j < 0 || j < i) continue;
+        const a = cell[k], b = cell[(k + 1) % cell.length];
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
 
-      // A ripple passing over a corner lights both edges that meet there
-      for (const r of ripples) {
-        if (r.p <= 0) continue;
-        for (let k = 0; k < s.sides; k++) {
-          const d = Math.hypot(s.pts[k][0] - r.x, s.pts[k][1] - r.y);
-          if (Math.abs(d - r.radius) < 12) {
-            lightEdge(s, k, 1 - r.p);
-            lightEdge(s, (k + s.sides - 1) % s.sides, 1 - r.p);
+        // Ripple wavefronts light the walls they cross
+        const key = pairKey(i, j);
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        for (const r of ripples) {
+          if (r.p <= 0) continue;
+          if (Math.abs(Math.hypot(mx - r.x, my - r.y) - r.radius) < 14) {
+            const v = 1 - r.p;
+            if (v > (edgeGlow.get(key) || 0)) edgeGlow.set(key, v);
           }
         }
+        const g = edgeGlow.get(key);
+        if (g > 0.01) lit.push(a, b, g, (sites[i].band + sites[j].band) / 2);
       }
+    }
+    ctx.stroke();
 
-      // Faint outline, always visible
-      ctx.lineWidth = 1.2;
-      ctx.strokeStyle = `hsla(${h + 30}, 50%, 88%, ${0.22 + mood.level * 0.15})`;
+    // Lit walls glow, then fade out over about a second
+    for (let n = 0; n < lit.length; n += 4) {
+      const a = lit[n], b = lit[n + 1], g = lit[n + 2];
+      const edgeHue = h + 40 + lit[n + 3] * 80;
+      ctx.lineWidth = 1.5 + g * 1.5;
+      ctx.strokeStyle = `hsla(${edgeHue}, 90%, 80%, ${g})`;
+      ctx.shadowColor = `hsla(${edgeHue}, 100%, 70%, ${g})`;
+      ctx.shadowBlur = 14 * g;
       ctx.beginPath();
-      ctx.moveTo(s.pts[0][0], s.pts[0][1]);
-      for (let k = 1; k < s.sides; k++) ctx.lineTo(s.pts[k][0], s.pts[k][1]);
-      ctx.closePath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
       ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
 
-      // Lit edges glow, then fade out over about a second
-      const edgeHue = h + 40 + s.band * 60;
-      for (let e = 0; e < s.sides; e++) {
-        const g = s.glow[e];
-        if (g <= 0.01) continue;
-        s.glow[e] = Math.max(0, g - dt * 0.9);
-        const [x1, y1] = s.pts[e];
-        const [x2, y2] = s.pts[(e + 1) % s.sides];
-        ctx.lineWidth = 1.5 + g * 1.5;
-        ctx.strokeStyle = `hsla(${edgeHue}, 90%, 80%, ${g})`;
-        ctx.shadowColor = `hsla(${edgeHue}, 100%, 70%, ${g})`;
-        ctx.shadowBlur = 14 * g;
+    for (const [key, g] of edgeGlow) {
+      const next = g - dt * 0.9;
+      if (next <= 0.01) edgeGlow.delete(key); else edgeGlow.set(key, next);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // ---------- Geometry: Bézier ribbons ----------
+  // Three silky ribbons, each a bundle of cubic Bézier strands, sway across the
+  // screen. Bass, mids and treble each bend one ribbon. Light pulses travel
+  // along the strands on beats and with the music.
+  const STRANDS = 14;
+  const ribbons = [
+    { y: 0.28, band: [0, 0.25],   hueOff: 0,  ph: 0.0, energy: 0 },
+    { y: 0.52, band: [0.25, 0.6], hueOff: 50, ph: 2.1, energy: 0 },
+    { y: 0.74, band: [0.6, 1],    hueOff: -40, ph: 4.2, energy: 0 },
+  ];
+  const pulses = [];
+
+  function strandPoints(rb, s, t) {
+    const k = s / (STRANDS - 1) - 0.5;          // -0.5..0.5 across the ribbon
+    const bend = 0.18 + rb.energy * 0.35;
+    return [
+      -0.05 * W, H * (rb.y + 0.12 * Math.sin(t * 0.13 + rb.ph) + k * 0.05),
+      0.33 * W,  H * (rb.y + bend * Math.sin(t * 0.21 + rb.ph + k * 0.9)),
+      0.67 * W,  H * (rb.y - bend * Math.cos(t * 0.17 + rb.ph * 1.3 - k * 0.9)),
+      1.05 * W,  H * (rb.y + 0.12 * Math.cos(t * 0.11 + rb.ph) - k * 0.05),
+    ];
+  }
+
+  function bezierAt(p, u) {
+    const v = 1 - u;
+    const a = v * v * v, b = 3 * v * v * u, c = 3 * v * u * u, d = u * u * u;
+    return [a * p[0] + b * p[2] + c * p[4] + d * p[6], a * p[1] + b * p[3] + c * p[5] + d * p[7]];
+  }
+
+  function spawnPulse(r) {
+    pulses.push({
+      r: r ?? (Math.random() * ribbons.length) | 0,
+      s: (Math.random() * STRANDS) | 0,
+      u: 0,
+      speed: 0.25 + Math.random() * 0.2,
+    });
+  }
+
+  function updateAndDrawRibbons(t, dt) {
+    const live = analyser && !audio.paused;
+    const h = hue + tone * 140;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round';
+
+    for (let r = 0; r < ribbons.length; r++) {
+      const rb = ribbons[r];
+      const lo = Math.floor(rb.band[0] * BARS), hi = Math.max(lo + 1, Math.floor(rb.band[1] * BARS));
+      let sum = 0;
+      for (let i = lo; i < hi; i++) sum += bars[i];
+      rb.energy = follow(rb.energy, sum / (hi - lo), 3, 0.8, dt);
+
+      if (live && Math.random() < (rb.energy * 2 + mood.level) * dt) spawnPulse(r);
+
+      ctx.lineWidth = 1;
+      for (let s = 0; s < STRANDS; s++) {
+        const k = Math.abs(s / (STRANDS - 1) - 0.5) * 2;   // 0 in the middle, 1 at the edges
+        const p = strandPoints(rb, s, t);
+        ctx.strokeStyle = `hsla(${h + rb.hueOff + s * 3}, 80%, 80%, ${(0.06 + rb.energy * 0.35) * (1 - k * 0.7)})`;
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
+        ctx.moveTo(p[0], p[1]);
+        ctx.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
         ctx.stroke();
       }
-      ctx.shadowBlur = 0;
     }
+
+    // Light pulses: a glowing head with a short fading tail
+    for (let i = pulses.length - 1; i >= 0; i--) {
+      const pl = pulses[i];
+      pl.u += pl.speed * dt;
+      if (pl.u > 1.05) { pulses.splice(i, 1); continue; }
+      const rb = ribbons[pl.r];
+      const p = strandPoints(rb, pl.s, t);
+      const ph = h + rb.hueOff + 40;
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = `hsla(${ph}, 100%, 85%, 0.8)`;
+      ctx.shadowColor = `hsla(${ph}, 100%, 70%, 1)`;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      for (let n = 0; n <= 10; n++) {
+        const [x, y] = bezierAt(p, Math.max(0, pl.u - n * 0.006));
+        if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -500,6 +662,15 @@
     pointerDown = true;
     canvas.setPointerCapture(e.pointerId);
     addRipple(e.clientX, e.clientY);
+    // Push nearby Voronoi seeds away so the cells warp around the click
+    for (const s of sites) {
+      const dx = s.x - e.clientX, dy = s.y - e.clientY;
+      const d = Math.hypot(dx, dy) || 1;
+      if (d < 260) {
+        s.vx += (dx / d) * (260 - d) * 2;
+        s.vy += (dy / d) * (260 - d) * 2;
+      }
+    }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
   canvas.addEventListener('pointermove', (e) => {
@@ -579,7 +750,8 @@
 
     analyse(t, dt);
     drawField();
-    updateAndDrawShapes(t, dt);
+    updateAndDrawVoronoi(t, dt);
+    updateAndDrawRibbons(t, dt);
     updateAndDrawMotes(t, dt);
     if (showBars) drawBars();
     updateAndDrawRipples(dt);
@@ -589,6 +761,8 @@
       seek.value = Math.round((audio.currentTime / audio.duration) * 1000);
       curTime.textContent = fmt(audio.currentTime);
     }
+    // Safety net: keep the play button in step even if a media event was missed
+    if (shownPlaying === audio.paused) syncPlayIcon();
     if (++frame % 10 === 0) {
       document.documentElement.style.setProperty('--accent', `hsl(${(hue + 30) % 360} 70% 72%)`);
     }

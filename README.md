@@ -15,7 +15,8 @@ python3 -m http.server 8000
 
 - **Load music:** press **Choose MP3**, or drag an audio file onto the page.
 - **Ripples:** click anywhere on the screen; drag to leave a trail of ripples.
-- **Geometry:** faint outlined triangles, squares, pentagons and hexagons float and turn slowly across the screen. Each one listens to its own part of the music, and its edges light up at random, more often when that part is loud. Strong beats light a burst of edges, and a ripple passing over a corner lights the edges that meet there.
+- **Voronoi diagram:** about 30 seed points drift slowly, and every frame the screen is split into the cells closest to each one. Each seed listens to its own part of the spectrum: its cell glows faintly when that part is loud, and random cell walls light up and fade. Strong beats light a burst of walls. A click pushes nearby seeds away so the cells warp, and the ripple lights every wall it crosses.
+- **Bézier ribbons:** three silky ribbons, each a bundle of 14 cubic Bézier strands, sway across the screen. Bass, mids and treble each bend and brighten one ribbon, and light pulses travel along the strands with the music and on beats.
 - **Bars:** show or hide the bar graph with the **Bars** button.
 
 | Key   | Action             |
@@ -49,4 +50,4 @@ The control bar hides after 3 seconds of no mouse movement while music plays; mo
 - **Mood:** the base colour turns slowly around the colour wheel, a little faster when the music is fuller. The whole screen brightens with loudness and lifts gently on strong beats.
 - **Bars:** soft, translucent bars mirrored from the centre, with bass in the middle.
 - **Texture:** faint floating motes and fine film grain.
-- **Ripples:** click or drag to send out rings that push the motes aside. They grow larger when the music is louder.
+- **Ripples:** click or drag to send out rings that push the motes aside and warp the Voronoi cells. They grow larger when the music is louder.
