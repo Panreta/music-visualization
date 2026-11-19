@@ -62,7 +62,7 @@ A life-like cellular automaton on a grid that wraps around the edges. It starts 
 
 The grid steps 2 generations per second, up to 6 when the music is loud, each column takes the colour and brightness of the bar at the same distance from the centre, and dead cells fade out slowly. Strong beats (at most one every 1.5 seconds) make one to three living cells light up a neighbour, which nudges the pattern into new shapes (this also happens every 6 seconds when there are no beats). If everything dies, a new seed appears in the centre.
 
-Click a cell to light it (or click a lit one to turn it off), and drag to light a line of cells. The grid holds still while the mouse button is down, so you can draw a shape; when you let go, your cells join the pattern and follow the same rule. Newly lit cells glow white and cool to their colour.
+Click a cell to light it (or click a lit one to turn it off), and drag to light a line of cells. The grid holds still while the mouse button is down, so you can draw a shape; when you let go, your cells join the pattern. A lit cell is kept alive for 8 generations (about 4 seconds) whatever the rule says, so it can wake up its neighbours, and after that it follows the rule like any other cell. Lit cells glow white and cool to their colour, and clicks in this scene make no ripple so the cell stays visible.
 
 **On top of every scene:**
 

@@ -1169,6 +1169,8 @@
   let lifeCols = 0, lifeRows = 0, lifeCell = 12;
   let lifeCells = new Uint8Array(0), lifeNext = new Uint8Array(0);
   let lifeGlow = new Float32Array(0), lifeFlash = new Float32Array(0);
+  let lifeHold = new Uint8Array(0);   // generations a lit cell is kept alive
+  const LIFE_HOLD = 8;
   let lifeImg = null;
   let lifeRule = null;
   let lifeAcc = 0, lifeQuiet = 0, lifeLastSeed = 0;
@@ -1199,6 +1201,7 @@
     lifeNext = new Uint8Array(n);
     lifeGlow = new Float32Array(n);
     lifeFlash = new Float32Array(n);
+    lifeHold = new Uint8Array(n);
     lcan.width = lifeCols;
     lcan.height = lifeRows;
     lifeImg = lctx.createImageData(lifeCols, lifeRows);
@@ -1254,6 +1257,7 @@
     lifeCells.fill(0);
     lifeGlow.fill(0);
     lifeFlash.fill(0);
+    lifeHold.fill(0);
     const dens = 0.3;
     let best = null, bestScore = -1;
     for (let tries = 0; tries < 12; tries++) {
@@ -1287,6 +1291,8 @@
   }
 
   // Light the cell under the pointer. A click toggles it; a drag only lights.
+  // A lit cell is kept alive for a few generations whatever the rule says, so
+  // it has time to wake up its neighbours before it has to survive on its own.
   let lifeLastPainted = -1;
   function paintLife(px, py, toggle) {
     if (!lifeRule) return;
@@ -1296,7 +1302,8 @@
     lifeLastPainted = i;
     const on = toggle ? 1 - lifeCells[i] : 1;
     setLifeCell(x, y, on);
-    if (on) lifeFlash[i] = 1;
+    lifeHold[i] = on ? LIFE_HOLD : 0;
+    lifeFlash[i] = on;
   }
 
   // On a beat, a few living cells light up a random neighbour each
@@ -1314,7 +1321,7 @@
   }
 
   function stepLife() {
-    const C = lifeCols, R = lifeRows, cur = lifeCells, nxt = lifeNext;
+    const C = lifeCols, R = lifeRows, cur = lifeCells, nxt = lifeNext, hold = lifeHold;
     const born = lifeRule.born, survive = lifeRule.survive;
     let pop = 0;
     for (let y = 0; y < R; y++) {
@@ -1323,7 +1330,8 @@
         const l = x === 0 ? C - 1 : x - 1, r = x === C - 1 ? 0 : x + 1;
         const n = cur[up + l] + cur[up + x] + cur[up + r] + cur[row + l] + cur[row + r] +
           cur[dn + l] + cur[dn + x] + cur[dn + r];
-        const alive = (cur[row + x] ? survive : born) >> n & 1;
+        let alive = (cur[row + x] ? survive : born) >> n & 1;
+        if (hold[row + x]) { hold[row + x]--; alive = 1; }
         nxt[row + x] = alive;
         pop += alive;
       }
@@ -1376,7 +1384,7 @@
       colRgb[x] = hslToRgb(h - 40 + (k / BARS) * 110, 0.8, 0.5 + e * 0.25);
     }
 
-    const fade = Math.exp(-dt * 2), flashFade = Math.exp(-dt * 2.5);
+    const fade = Math.exp(-dt * 2), flashFade = Math.exp(-dt * 0.8);
     const data = lifeImg.data;
     for (let y = 0, i = 0; y < lifeRows; y++) {
       for (let x = 0; x < lifeCols; x++, i++) {
@@ -1528,6 +1536,12 @@
   canvas.addEventListener('pointerdown', (e) => {
     pointerDown = true;
     canvas.setPointerCapture(e.pointerId);
+    if (scene === 'life') {
+      // No ripple here: it would hide the cell being lit
+      lifeLastPainted = -1;
+      paintLife(e.clientX, e.clientY, true);
+      return;
+    }
     addRipple(e.clientX, e.clientY);
     if (scene === 'glass') {
       // Push nearby Voronoi seeds away so the cells warp around the click
@@ -1554,17 +1568,14 @@
           f.vy += (dy / d) * 120;
         }
       }
-    } else if (scene === 'brownian') {
-      burstBrownian(e.clientX, e.clientY);
     } else {
-      lifeLastPainted = -1;
-      paintLife(e.clientX, e.clientY, true);
+      burstBrownian(e.clientX, e.clientY);
     }
     spawnSparks(e.clientX, e.clientY, 22, hue + 30, 1 + mood.level * 1.5);
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!pointerDown) return;
-    if (scene === 'life') paintLife(e.clientX, e.clientY, false);
+    if (scene === 'life') { paintLife(e.clientX, e.clientY, false); return; }
     const now = performance.now();
     if (now - lastDragRipple > 70) {
       lastDragRipple = now;
