@@ -100,8 +100,9 @@
 
   function syncPlayIcon() {
     const playing = !audio.paused;
-    iconPlay.hidden = playing;
-    iconPause.hidden = !playing;
+    // SVG elements ignore the .hidden property, so set the attribute itself
+    iconPlay.toggleAttribute('hidden', playing);
+    iconPause.toggleAttribute('hidden', !playing);
     playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
     scheduleIdle();
   }
@@ -235,7 +236,7 @@
     mood.level = mood.bass * 0.5 + mood.mid * 0.35 + mood.treble * 0.15;
 
     bassAvg = follow(bassAvg, b, 0.6, 0.6, dt);
-    if (live && b > 0.35 && b > bassAvg * 1.3 && t - lastBeat > 0.5) {
+    if (live && b > 0.2 && b > bassAvg * 1.15 && t - lastBeat > 0.35) {
       lastBeat = t;
       swell = Math.min(1, swell + 0.5);
       sparkleEdges(4 + Math.round(mood.level * 8));
@@ -350,7 +351,7 @@
       // Random edges light up; the louder this shape's band, the more often
       if (live) {
         const v = bars[Math.min(BARS - 1, (s.band * BARS) | 0)];
-        if (Math.random() < v * v * 6 * dt) lightEdge(s, (Math.random() * s.sides) | 0, 0.6 + v * 0.4);
+        if (Math.random() < (v * 3 + mood.level * 2) * dt) lightEdge(s, (Math.random() * s.sides) | 0, 0.6 + Math.min(0.4, v));
       } else if (Math.random() < 0.15 * dt) {
         lightEdge(s, (Math.random() * s.sides) | 0, 0.5);
       }
@@ -368,8 +369,8 @@
       }
 
       // Faint outline, always visible
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = `hsla(${h + 30}, 50%, 85%, 0.1)`;
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = `hsla(${h + 30}, 50%, 88%, ${0.22 + mood.level * 0.15})`;
       ctx.beginPath();
       ctx.moveTo(s.pts[0][0], s.pts[0][1]);
       for (let k = 1; k < s.sides; k++) ctx.lineTo(s.pts[k][0], s.pts[k][1]);
@@ -568,8 +569,11 @@
   // ---------- Main loop ----------
   let last = performance.now();
   let frame = 0;
-  function loop(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
+  function loop() {
+    // Read the clock here rather than trusting the rAF timestamp, which can be
+    // earlier than `last` and would make dt negative
+    const now = performance.now();
+    const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
     last = now;
     const t = now / 1000;
 
