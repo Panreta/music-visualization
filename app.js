@@ -241,7 +241,9 @@
     if (live && b > 0.2 && b > bassAvg * 1.15 && t - lastBeat > 0.35) {
       lastBeat = t;
       swell = Math.min(1, swell + 0.5);
-      sparkleEdges(6 + Math.round(mood.level * 10));
+      sparkleEdges(10 + Math.round(mood.level * 20));
+      spawnWave();
+      spawnPulse();
       spawnPulse();
     }
     swell = Math.max(0, swell - dt * 0.9);
@@ -293,34 +295,40 @@
     ctx.restore();
   }
 
-  // ---------- Geometry: Voronoi diagram ----------
-  // Seed points drift slowly; every frame the screen is split into the cells
-  // closest to each seed. Each seed listens to its own part of the spectrum.
-  // Cell walls light up at random with the music, in bursts on beats, and
-  // where a ripple's wavefront crosses them.
+  // ---------- Geometry: stained-glass Voronoi ----------
+  // Hundreds of seeds on a jittered grid drift slowly; every frame the screen
+  // is split into the cells closest to each seed and filled like stained glass.
+  // Seeds near the centre listen to the bass, seeds near the edges to the
+  // treble. Beats send waves of light through the glass, clicks do too, and
+  // random lead lines light up with the music.
   const sites = [];
   const edgeGlow = new Map();   // key for a pair of neighbouring seeds -> glow 0..1
+  const waves = [];             // expanding light waves sent out on beats
   let cells = [];
+  let gridCols = 0, gridRows = 0, cellSize = 0;
 
   function layoutSites() {
     sites.length = 0;
     edgeGlow.clear();
-    const cols = Math.max(4, Math.round(W / 210));
-    const rows = Math.max(3, Math.round(H / 210));
-    const cw = W / cols, ch = H / rows;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
+    cellSize = Math.max(55, Math.sqrt((W * H) / 280));
+    gridCols = Math.ceil(W / cellSize) + 1;
+    gridRows = Math.ceil(H / cellSize) + 1;
+    const half = Math.hypot(W, H) / 2;
+    for (let r = 0; r < gridRows; r++) {
+      for (let c = 0; c < gridCols; c++) {
+        const hx = (c - 0.3 + Math.random() * 0.6) * cellSize;
+        const hy = (r - 0.3 + Math.random() * 0.6) * cellSize;
         sites.push({
-          hx: (c + 0.15 + Math.random() * 0.7) * cw,   // home position
-          hy: (r + 0.15 + Math.random() * 0.7) * ch,
-          amp: Math.min(cw, ch) * 0.4,
-          sx: 0.05 + Math.random() * 0.08,
-          sy: 0.05 + Math.random() * 0.08,
+          hx, hy,
+          sx: 0.08 + Math.random() * 0.1,
+          sy: 0.08 + Math.random() * 0.1,
           ph: Math.random() * Math.PI * 2,
-          band: Math.random(),                         // 0 = bass, 1 = treble
-          energy: 0,
-          ox: 0, oy: 0, vx: 0, vy: 0,                  // offset from ripple pushes
-          x: 0, y: 0,
+          // Neighbouring cells get similar colours, so hues sweep across the glass
+          hueOff: Math.sin(hx * 0.004 + 1.3) * 35 + Math.cos(hy * 0.005) * 30 + (Math.random() - 0.5) * 18,
+          band: Math.min(1, Math.hypot(hx - W / 2, hy - H / 2) / half),
+          energy: 0, light: 0,
+          ox: 0, oy: 0, vx: 0, vy: 0,
+          x: hx, y: hy,
         });
       }
     }
@@ -328,7 +336,7 @@
   window.addEventListener('resize', layoutSites);
   layoutSites();
 
-  const pairKey = (i, j) => (i < j ? i * 4096 + j : j * 4096 + i);
+  const pairKey = (i, j) => (i < j ? i * 8192 + j : j * 8192 + i);
 
   // Sutherland–Hodgman clip of a polygon against the half-plane nx*x + ny*y <= c.
   // Every vertex carries `e`, the neighbour that made its outgoing edge (-1 = screen border).
@@ -348,71 +356,104 @@
     return out;
   }
 
+  // Seeds never stray more than about a grid cell from home, so only seeds
+  // within two grid cells can share a wall; that keeps this fast with hundreds of cells.
   function computeCells() {
     const m = 4;
     cells = sites.map((s, i) => {
+      const r0 = (i / gridCols) | 0, c0 = i % gridCols;
       let poly = [
         { x: -m, y: -m, e: -1 }, { x: W + m, y: -m, e: -1 },
         { x: W + m, y: H + m, e: -1 }, { x: -m, y: H + m, e: -1 },
       ];
-      for (let j = 0; j < sites.length && poly.length; j++) {
-        if (j === i) continue;
-        const o = sites[j];
-        const nx = o.x - s.x, ny = o.y - s.y;
-        const c = nx * (s.x + o.x) / 2 + ny * (s.y + o.y) / 2;
-        poly = clipPoly(poly, nx, ny, c, j);
+      for (let r = Math.max(0, r0 - 2); r <= Math.min(gridRows - 1, r0 + 2) && poly.length; r++) {
+        for (let c = Math.max(0, c0 - 2); c <= Math.min(gridCols - 1, c0 + 2) && poly.length; c++) {
+          const j = r * gridCols + c;
+          if (j === i) continue;
+          const o = sites[j];
+          const nx = o.x - s.x, ny = o.y - s.y;
+          poly = clipPoly(poly, nx, ny, nx * (s.x + o.x) / 2 + ny * (s.y + o.y) / 2, j);
+        }
       }
       return poly;
     });
   }
 
-  // Light a random wall of a random cell (or of cell `i`)
+  function glowEdge(i, j, v) {
+    const key = pairKey(i, j);
+    if (v > (edgeGlow.get(key) || 0)) edgeGlow.set(key, v);
+  }
+
+  // Light a random wall of cell `i`
   function lightRandomEdge(i, v = 1) {
     const cell = cells[i];
     if (!cell || !cell.length) return;
-    const k = (Math.random() * cell.length) | 0;
-    const j = cell[k].e;
-    if (j < 0) return;
-    const key = pairKey(i, j);
-    if (v > (edgeGlow.get(key) || 0)) edgeGlow.set(key, v);
+    const j = cell[(Math.random() * cell.length) | 0].e;
+    if (j >= 0) glowEdge(i, j, v);
   }
 
   function sparkleEdges(n) {
     for (let k = 0; k < n && sites.length; k++) lightRandomEdge((Math.random() * sites.length) | 0);
   }
 
+  function spawnWave() {
+    waves.push({
+      x: W * (0.25 + Math.random() * 0.5),
+      y: H * (0.25 + Math.random() * 0.5),
+      r: 0,
+      strength: 0.5 + mood.level * 0.5,
+    });
+  }
+
+  // How brightly a moving wavefront lights a point: a soft band around the ring
+  function frontBump(px, py, x, y, radius, width) {
+    const d = Math.abs(Math.hypot(px - x, py - y) - radius);
+    return d < width ? 1 - d / width : 0;
+  }
+
   function updateAndDrawVoronoi(t, dt) {
     const live = analyser && !audio.paused;
     const h = hue + tone * 140;
+    const maxDrift = cellSize * 0.5;
+    const diag = Math.hypot(W, H);
 
-    // Move seeds: slow drift, wider when the music is fuller, plus ripple pushes
+    for (let i = waves.length - 1; i >= 0; i--) {
+      waves[i].r += dt * 380;
+      if (waves[i].r > diag) waves.splice(i, 1);
+    }
+
+    // Move seeds and work out how lit each cell is
     for (const s of sites) {
       s.vx *= Math.exp(-1.5 * dt); s.vy *= Math.exp(-1.5 * dt);
-      s.ox = (s.ox + s.vx * dt) * Math.exp(-0.6 * dt);
-      s.oy = (s.oy + s.vy * dt) * Math.exp(-0.6 * dt);
-      const wander = 0.6 + mood.level * 0.6;
-      s.x = s.hx + Math.sin(t * s.sx + s.ph) * s.amp * wander + s.ox;
-      s.y = s.hy + Math.cos(t * s.sy + s.ph * 1.7) * s.amp * wander + s.oy;
-      s.energy = follow(s.energy, bars[Math.min(BARS - 1, (s.band * BARS) | 0)], 4, 1.2, dt);
+      s.ox = Math.max(-maxDrift, Math.min(maxDrift, (s.ox + s.vx * dt) * Math.exp(-0.6 * dt)));
+      s.oy = Math.max(-maxDrift, Math.min(maxDrift, (s.oy + s.vy * dt) * Math.exp(-0.6 * dt)));
+      const wander = cellSize * (0.22 + mood.level * 0.2);
+      s.x = s.hx + Math.sin(t * s.sx + s.ph) * wander + s.ox;
+      s.y = s.hy + Math.cos(t * s.sy + s.ph * 1.7) * wander + s.oy;
+      s.energy = follow(s.energy, bars[Math.min(BARS - 1, (s.band * BARS) | 0)], 5, 1.5, dt);
+
+      let lit = 0;
+      for (const w of waves) lit = Math.max(lit, frontBump(s.x, s.y, w.x, w.y, w.r, 90) * w.strength * (1 - w.r / diag));
+      for (const r of ripples) if (r.p > 0) lit = Math.max(lit, frontBump(s.x, s.y, r.x, r.y, r.radius, 50) * (1 - r.p));
+      const twinkle = 0.5 + 0.5 * Math.sin(t * 0.7 + s.ph * 5);
+      s.light = follow(s.light, Math.min(1, s.energy * 1.4 + lit + twinkle * 0.08), 10, 2, dt);
     }
     computeCells();
 
-    // Random lighting: the louder a seed's band, the more often its walls glow
+    // Random lead lines light up; the louder a cell's band, the more often
     for (let i = 0; i < sites.length; i++) {
-      const rate = live ? sites[i].energy * 3 + mood.level * 2 : 0.12;
+      const rate = live ? sites[i].energy * 1.2 + mood.level * 0.4 : 0.03;
       if (Math.random() < rate * dt) lightRandomEdge(i, live ? 0.6 + Math.min(0.4, sites[i].energy) : 0.5);
     }
 
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-
-    // Cells glow faintly with their band's energy
+    // Glass: every cell filled with its own colour, brighter when lit
+    ctx.globalCompositeOperation = 'source-over';
     for (let i = 0; i < cells.length; i++) {
       const cell = cells[i];
-      const e = sites[i].energy;
-      if (cell.length < 3 || e < 0.02) continue;
-      ctx.fillStyle = `hsla(${h + 20 + sites[i].band * 80}, 70%, 60%, ${Math.min(0.12, e * 0.18)})`;
+      if (cell.length < 3) continue;
+      const s = sites[i];
+      const L = s.light;
+      ctx.fillStyle = `hsla(${h + s.hueOff}, ${50 + L * 30}%, ${16 + L * 38}%, ${0.5 + L * 0.35})`;
       ctx.beginPath();
       ctx.moveTo(cell[0].x, cell[0].y);
       for (let k = 1; k < cell.length; k++) ctx.lineTo(cell[k].x, cell[k].y);
@@ -420,12 +461,13 @@
       ctx.fill();
     }
 
-    // Walls: each shared wall is drawn once, from the lower-numbered cell
-    const restAlpha = 0.16 + mood.level * 0.12;
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = `hsla(${h + 30}, 50%, 88%, ${restAlpha})`;
-    ctx.beginPath();
+    // Lead lines between the panes, each shared wall drawn once
     const lit = [];
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = `hsla(${h}, 35%, 5%, 0.75)`;
+    ctx.beginPath();
     for (let i = 0; i < cells.length; i++) {
       const cell = cells[i];
       for (let k = 0; k < cell.length; k++) {
@@ -435,28 +477,24 @@
         ctx.moveTo(a.x, a.y);
         ctx.lineTo(b.x, b.y);
 
-        // Ripple wavefronts light the walls they cross
-        const key = pairKey(i, j);
+        // Click ripples light the walls they cross
         const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
         for (const r of ripples) {
-          if (r.p <= 0) continue;
-          if (Math.abs(Math.hypot(mx - r.x, my - r.y) - r.radius) < 14) {
-            const v = 1 - r.p;
-            if (v > (edgeGlow.get(key) || 0)) edgeGlow.set(key, v);
-          }
+          if (r.p > 0 && frontBump(mx, my, r.x, r.y, r.radius, 14) > 0) glowEdge(i, j, 1 - r.p);
         }
-        const g = edgeGlow.get(key);
-        if (g > 0.01) lit.push(a, b, g, (sites[i].band + sites[j].band) / 2);
+        const g = edgeGlow.get(pairKey(i, j));
+        if (g > 0.01) lit.push(a, b, g, sites[i].hueOff);
       }
     }
     ctx.stroke();
 
     // Lit walls glow, then fade out over about a second
+    ctx.globalCompositeOperation = 'lighter';
     for (let n = 0; n < lit.length; n += 4) {
       const a = lit[n], b = lit[n + 1], g = lit[n + 2];
-      const edgeHue = h + 40 + lit[n + 3] * 80;
+      const edgeHue = h + lit[n + 3] + 50;
       ctx.lineWidth = 1.5 + g * 1.5;
-      ctx.strokeStyle = `hsla(${edgeHue}, 90%, 80%, ${g})`;
+      ctx.strokeStyle = `hsla(${edgeHue}, 95%, 82%, ${g})`;
       ctx.shadowColor = `hsla(${edgeHue}, 100%, 70%, ${g})`;
       ctx.shadowBlur = 14 * g;
       ctx.beginPath();
@@ -473,26 +511,36 @@
     ctx.globalCompositeOperation = 'source-over';
   }
 
-  // ---------- Geometry: Bézier ribbons ----------
-  // Three silky ribbons, each a bundle of cubic Bézier strands, sway across the
-  // screen. Bass, mids and treble each bend one ribbon. Light pulses travel
-  // along the strands on beats and with the music.
-  const STRANDS = 14;
+  // ---------- Geometry: Bézier silk ----------
+  // Four ribbons cross the screen in different directions. Each is a bundle
+  // of cubic Bézier strands whose ends are swapped, so the strands twist
+  // through each other like string art. Each ribbon follows one part of the
+  // spectrum; light pulses travel along the strands with the music.
+  const STRANDS = 90;
+  const GROUPS = 6;   // strands are batched into a few paths for speed
   const ribbons = [
-    { y: 0.28, band: [0, 0.25],   hueOff: 0,  ph: 0.0, energy: 0 },
-    { y: 0.52, band: [0.25, 0.6], hueOff: 50, ph: 2.1, energy: 0 },
-    { y: 0.74, band: [0.6, 1],    hueOff: -40, ph: 4.2, energy: 0 },
+    { a: [-0.05, 0.15], b: [1.05, 0.8],  band: [0, 0.2],   hueOff: 0,   ph: 0.0, energy: 0 },
+    { a: [-0.05, 0.9],  b: [1.05, 0.2],  band: [0.2, 0.45], hueOff: 45,  ph: 1.3, energy: 0 },
+    { a: [0.2, -0.05],  b: [0.85, 1.05], band: [0.45, 0.7], hueOff: -40, ph: 2.6, energy: 0 },
+    { a: [-0.05, 0.5],  b: [1.05, 0.45], band: [0.7, 1],   hueOff: 90,  ph: 3.9, energy: 0 },
   ];
   const pulses = [];
 
   function strandPoints(rb, s, t) {
-    const k = s / (STRANDS - 1) - 0.5;          // -0.5..0.5 across the ribbon
-    const bend = 0.18 + rb.energy * 0.35;
+    const k = s / (STRANDS - 1) - 0.5;        // -0.5..0.5 across the ribbon
+    const ax = rb.a[0] * W, ay = rb.a[1] * H, bx = rb.b[0] * W, by = rb.b[1] * H;
+    const len = Math.hypot(bx - ax, by - ay) || 1;
+    const px = -(by - ay) / len, py = (bx - ax) / len;   // unit perpendicular
+    const spread = len * 0.12;
+    const bend = len * (0.12 + rb.energy * 0.22);
+    const twist = 2.5 + rb.energy * 3;
+    const o1 = bend * Math.sin(t * 0.2 + rb.ph + k * twist);
+    const o2 = bend * Math.cos(t * 0.16 + rb.ph * 1.3 - k * twist);
     return [
-      -0.05 * W, H * (rb.y + 0.12 * Math.sin(t * 0.13 + rb.ph) + k * 0.05),
-      0.33 * W,  H * (rb.y + bend * Math.sin(t * 0.21 + rb.ph + k * 0.9)),
-      0.67 * W,  H * (rb.y - bend * Math.cos(t * 0.17 + rb.ph * 1.3 - k * 0.9)),
-      1.05 * W,  H * (rb.y + 0.12 * Math.cos(t * 0.11 + rb.ph) - k * 0.05),
+      ax + px * k * spread, ay + py * k * spread,
+      ax + (bx - ax) * 0.33 + px * o1, ay + (by - ay) * 0.33 + py * o1,
+      ax + (bx - ax) * 0.67 + px * o2, ay + (by - ay) * 0.67 + py * o2,
+      bx - px * k * spread, by - py * k * spread,     // ends swapped: strands cross
     ];
   }
 
@@ -507,7 +555,7 @@
       r: r ?? (Math.random() * ribbons.length) | 0,
       s: (Math.random() * STRANDS) | 0,
       u: 0,
-      speed: 0.25 + Math.random() * 0.2,
+      speed: 0.2 + Math.random() * 0.2,
     });
   }
 
@@ -516,6 +564,7 @@
     const h = hue + tone * 140;
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
+    ctx.lineWidth = 0.9;
 
     for (let r = 0; r < ribbons.length; r++) {
       const rb = ribbons[r];
@@ -523,17 +572,19 @@
       let sum = 0;
       for (let i = lo; i < hi; i++) sum += bars[i];
       rb.energy = follow(rb.energy, sum / (hi - lo), 3, 0.8, dt);
+      if (live && Math.random() < (rb.energy * 3 + mood.level) * dt) spawnPulse(r);
 
-      if (live && Math.random() < (rb.energy * 2 + mood.level) * dt) spawnPulse(r);
-
-      ctx.lineWidth = 1;
-      for (let s = 0; s < STRANDS; s++) {
-        const k = Math.abs(s / (STRANDS - 1) - 0.5) * 2;   // 0 in the middle, 1 at the edges
-        const p = strandPoints(rb, s, t);
-        ctx.strokeStyle = `hsla(${h + rb.hueOff + s * 3}, 80%, 80%, ${(0.06 + rb.energy * 0.35) * (1 - k * 0.7)})`;
+      for (let g = 0; g < GROUPS; g++) {
+        const edge = g / (GROUPS - 1);   // 0 = middle strands, 1 = outer strands
+        ctx.strokeStyle = `hsla(${h + rb.hueOff + g * 8}, 85%, 82%, ${(0.09 + rb.energy * 0.4) * (1 - edge * 0.55)})`;
         ctx.beginPath();
-        ctx.moveTo(p[0], p[1]);
-        ctx.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
+        for (let s = 0; s < STRANDS; s++) {
+          const k = Math.abs(s / (STRANDS - 1) - 0.5) * 2;
+          if (Math.min(GROUPS - 1, (k * GROUPS) | 0) !== g) continue;
+          const p = strandPoints(rb, s, t);
+          ctx.moveTo(p[0], p[1]);
+          ctx.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
+        }
         ctx.stroke();
       }
     }
@@ -546,13 +597,13 @@
       const rb = ribbons[pl.r];
       const p = strandPoints(rb, pl.s, t);
       const ph = h + rb.hueOff + 40;
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = `hsla(${ph}, 100%, 85%, 0.8)`;
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = `hsla(${ph}, 100%, 85%, 0.85)`;
       ctx.shadowColor = `hsla(${ph}, 100%, 70%, 1)`;
       ctx.shadowBlur = 12;
       ctx.beginPath();
-      for (let n = 0; n <= 10; n++) {
-        const [x, y] = bezierAt(p, Math.max(0, pl.u - n * 0.006));
+      for (let n = 0; n <= 12; n++) {
+        const [x, y] = bezierAt(p, Math.max(0, pl.u - n * 0.005));
         if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.stroke();
