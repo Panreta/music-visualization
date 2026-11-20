@@ -286,6 +286,8 @@ body.idle .controls {
 .time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; }
 .seek-row .time:last-child { text-align: right; }
 
+.btn.icon-only { width: 40px; padding: 0; justify-content: center; }
+
 .btn.toggle { color: var(--muted); }
 .btn.toggle.active { color: var(--text); border-color: var(--accent); background: rgba(255, 255, 255, 0.1); }
 

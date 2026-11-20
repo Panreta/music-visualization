@@ -17,6 +17,7 @@
   const barsBtn = $('barsBtn');
   const sceneBtn = $('sceneBtn');
   const libBtn = $('libBtn');
+  const fsBtn = $('fsBtn');
 
   // ---------- Canvas sizing ----------
   let W = 0, H = 0;
@@ -315,11 +316,40 @@
     else if (e.key === 'l' || e.key === 'L') setLibraryOpen(library.hidden);
     else if (e.key === 's' || e.key === 'S') nextScene();
     else if (e.key === 'm' || e.key === 'M') refreshModel();
-    else if (e.key === 'f' || e.key === 'F') {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else document.documentElement.requestFullscreen?.();
-    }
+    else if (e.key === 'f' || e.key === 'F') toggleFullscreen();
   });
+
+  // ---------- Full screen ----------
+  // Macs have the green window button, but Windows browsers have no visible
+  // full-screen control (only F11), so the page offers its own button.
+  // Older Safari only has the webkit-prefixed version of the API.
+  const root = document.documentElement;
+  const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+  const canFullscreen = !!(root.requestFullscreen || root.webkitRequestFullscreen);
+  fsBtn.hidden = !canFullscreen;   // e.g. iPhone Safari cannot do it
+  function toggleFullscreen() {
+    try {
+      const p = fsElement()
+        ? (document.exitFullscreen || document.webkitExitFullscreen).call(document)
+        : (root.requestFullscreen || root.webkitRequestFullscreen).call(root, { navigationUI: 'hide' });
+      p?.catch?.((err) => console.warn('Full screen failed:', err));
+    } catch (err) {
+      console.warn('Full screen failed:', err);
+    }
+  }
+  function syncFullscreen() {
+    const on = !!fsElement();
+    $('fsIcon').setAttribute('d', on
+      ? 'M7 10H5V8h2V5h2v5zm8-5h2v3h2v2h-4zM5 14h4v5H7v-3H5zm10 0h4v2h-2v3h-2z'
+      : 'M5 5h5v2H7v3H5zm9 0h5v5h-2V7h-3zM5 14h2v3h3v2H5zm12 0h2v5h-5v-2h3z');
+    fsBtn.setAttribute('aria-label', on ? 'Exit full screen' : 'Enter full screen');
+    fsBtn.title = on ? 'Exit full screen (F)' : 'Full screen (F)';
+    // Some browsers skip the resize event on the switch, so size the canvas here too
+    window.dispatchEvent(new Event('resize'));
+  }
+  document.addEventListener('fullscreenchange', syncFullscreen);
+  document.addEventListener('webkitfullscreenchange', syncFullscreen);
+  fsBtn.addEventListener('click', (e) => { toggleFullscreen(); e.currentTarget.blur(); });
 
   // Hide the controls while music plays and the mouse is still
   let idleTimer = null;

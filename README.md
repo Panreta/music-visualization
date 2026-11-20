@@ -76,7 +76,7 @@ Click a cell to light it (or click a lit one to turn it off), and drag to light 
 | M     | New random equation / rule (Brownian and Life scenes) |
 | B     | Show / hide bars   |
 | L     | Show / hide the library |
-| F     | Toggle fullscreen  |
+| F     | Toggle full screen (or the full-screen button in the control bar) |
 
 The control bar hides after 3 seconds of no mouse movement while music plays; move the mouse to bring it back.
 
@@ -95,7 +95,7 @@ The control bar hides after 3 seconds of no mouse movement while music plays; mo
 | M     | New random equation / rule (Brownian and Life scenes) |
 | B     | Show / hide bars   |
 | L     | Show / hide the library |
-| F     | Toggle fullscreen  |
+| F     | Toggle full screen (or the full-screen button in the control bar) |
 
 The control bar hides after 3 seconds of no mouse movement while music plays; move the mouse to bring it back.
 
