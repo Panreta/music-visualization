@@ -286,6 +286,45 @@ body.idle .controls {
 .time { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; }
 .seek-row .time:last-child { text-align: right; }
 
+/* Play / Listen mode */
+.mode-switch {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.mode-switch button {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mode-switch button.active { background: rgba(255, 255, 255, 0.14); color: var(--text); }
+body:not(.listen-mode) .listen-only, body.listen-mode .play-only { display: none !important; }
+
+.listen-status {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.listen-status #listenStatus { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.listen-status .btn { height: 32px; margin-left: auto; }
+.listen-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.25); }
+.listen-dot.on { background: #ff5a5f; box-shadow: 0 0 0 0 rgba(255, 90, 95, 0.6); animation: listen-pulse 1.6s ease-out infinite; }
+@keyframes listen-pulse { to { box-shadow: 0 0 0 8px rgba(255, 90, 95, 0); } }
+@media (prefers-reduced-motion: reduce) { .listen-dot.on { animation: none; } }
+
 .btn.icon-only { width: 40px; padding: 0; justify-content: center; }
 
 .btn.toggle { color: var(--muted); }
@@ -324,7 +363,8 @@ input[type="range"]::-moz-range-thumb {
 
 @media (max-width: 720px) {
   .controls { flex-wrap: wrap; gap: 10px; bottom: 12px; }
-  .track { order: 3; flex-basis: 100%; }
+  .track, .listen-status { order: 3; flex-basis: 100%; }
+  #tabBtn span, #micBtn span { display: none; }
   #sceneBtn { margin-left: auto; }
   .volume { display: none; }
   .file-btn span, .btn.toggle span, #sceneBtn span { display: none; }

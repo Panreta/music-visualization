@@ -18,6 +18,13 @@
   const sceneBtn = $('sceneBtn');
   const libBtn = $('libBtn');
   const fsBtn = $('fsBtn');
+  const playModeBtn = $('playModeBtn');
+  const listenModeBtn = $('listenModeBtn');
+  const tabBtn = $('tabBtn');
+  const micBtn = $('micBtn');
+  const listenStatus = $('listenStatus');
+  const listenDot = $('listenDot');
+  const stopListenBtn = $('stopListenBtn');
 
   // ---------- Canvas sizing ----------
   let W = 0, H = 0;
@@ -43,6 +50,9 @@
   let actx = null, analyser = null, freqData = null;
   let objectUrl = null;
 
+  // The analyser is a side branch: the MP3 goes to the speakers and to the
+  // analyser, while listened-to sound (tab, screen, microphone) goes only to
+  // the analyser, so it is never played back a second time
   function initAudio() {
     if (actx) return;
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -52,10 +62,14 @@
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.85;
     src.connect(analyser);
-    analyser.connect(actx.destination);
+    src.connect(actx.destination);
     freqData = new Uint8Array(analyser.frequencyBinCount);
     computeBinEdges();
   }
+
+  // True while there is sound to follow: an MP3 playing, or a live input
+  let listenStream = null, listenSource = null;
+  const isLive = () => !!analyser && (listenStream ? true : !audio.paused);
 
   function isAudioFile(file) {
     return file && (file.type.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|flac)$/i.test(file.name));
@@ -165,8 +179,96 @@
     e.preventDefault();
     dragDepth = 0;
     dropOverlay.classList.remove('show');
-    if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
+    if (!e.dataTransfer.files.length) return;
+    // Dropping a song is a clear sign you want to play it
+    if (mode !== 'play') setMode('play');
+    loadFiles(e.dataTransfer.files);
   });
+
+  // ---------- Play / Listen mode ----------
+  // Play mode plays your own MP3s. Listen mode plays nothing itself: it
+  // follows sound from somewhere else, either a shared browser tab or screen
+  // (Spotify's web player, YouTube, or on Windows the whole computer) or the
+  // microphone. The sound is only measured, never recorded or saved.
+  let mode = 'play';
+  function setMode(m) {
+    mode = m;
+    document.body.classList.toggle('listen-mode', m === 'listen');
+    playModeBtn.classList.toggle('active', m === 'play');
+    listenModeBtn.classList.toggle('active', m === 'listen');
+    playModeBtn.setAttribute('aria-pressed', String(m === 'play'));
+    listenModeBtn.setAttribute('aria-pressed', String(m === 'listen'));
+    if (m === 'listen') {
+      audio.pause();
+      setLibraryOpen(false);
+    } else {
+      stopListening();
+    }
+    try { localStorage.setItem('mode', m); } catch {}
+  }
+  playModeBtn.addEventListener('click', (e) => { setMode('play'); e.currentTarget.blur(); });
+  listenModeBtn.addEventListener('click', (e) => { setMode('listen'); e.currentTarget.blur(); });
+
+  // Sharing a screen needs getDisplayMedia, which phones do not have
+  if (!navigator.mediaDevices?.getDisplayMedia) tabBtn.hidden = true;
+  if (!navigator.mediaDevices?.getUserMedia) micBtn.hidden = true;
+
+  function setListenStatus(text, on) {
+    listenStatus.textContent = text;
+    listenDot.classList.toggle('on', on);
+    stopListenBtn.hidden = !on;
+  }
+
+  function stopListening() {
+    if (listenSource) listenSource.disconnect();
+    if (listenStream) listenStream.getTracks().forEach((t) => t.stop());
+    listenSource = listenStream = null;
+    setListenStatus('Not listening', false);
+    scheduleIdle();
+  }
+
+  // Raw sound is wanted: the browser's call-quality filters would flatten the music
+  const RAW = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+
+  async function startListening(kind) {
+    initAudio();
+    if (actx.state === 'suspended') await actx.resume();
+    let stream;
+    try {
+      stream = kind === 'tab'
+        // Chrome only shares audio together with video, so ask for a tiny, slow video
+        ? await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 1, width: 320 }, audio: RAW,
+          systemAudio: 'include', selfBrowserSurface: 'exclude',
+        })
+        : await navigator.mediaDevices.getUserMedia({ audio: RAW });
+    } catch (err) {
+      // Cancelling the picker lands here too; just leave things as they were
+      if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') console.warn('Listening failed:', err);
+      if (!listenStream) setListenStatus(err.name === 'NotAllowedError' && kind === 'mic'
+        ? 'Microphone blocked — allow it in the address bar' : 'Not listening', false);
+      return;
+    }
+    const track = stream.getAudioTracks()[0];
+    if (!track) {
+      stream.getTracks().forEach((t) => t.stop());
+      setListenStatus('No sound was shared — pick a tab and turn on "Share tab audio"', false);
+      return;
+    }
+    stopListening();
+    listenStream = stream;
+    listenSource = actx.createMediaStreamSource(new MediaStream([track]));
+    listenSource.connect(analyser);
+    // Stopping from the browser's own "Stop sharing" bar ends the track
+    track.addEventListener('ended', () => { if (listenStream === stream) stopListening(); });
+    setListenStatus(kind === 'mic' ? 'Listening to the microphone' : 'Listening to the shared tab or screen', true);
+    hint.classList.add('gone');
+    pickRandomScene();
+    scheduleIdle();
+  }
+  tabBtn.addEventListener('click', (e) => { startListening('tab'); e.currentTarget.blur(); });
+  micBtn.addEventListener('click', (e) => { startListening('mic'); e.currentTarget.blur(); });
+  stopListenBtn.addEventListener('click', (e) => { stopListening(); e.currentTarget.blur(); });
 
   // ---------- Song library ----------
   // Songs are kept in IndexedDB, so they stay in this browser across visits.
@@ -311,7 +413,7 @@
 
   window.addEventListener('keydown', (e) => {
     if (e.target === seek || e.target === volume) return;
-    if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+    if (e.code === 'Space') { e.preventDefault(); if (mode === 'play') togglePlay(); }
     else if (e.key === 'b' || e.key === 'B') setBars(!showBars);
     else if (e.key === 'l' || e.key === 'L') setLibraryOpen(library.hidden);
     else if (e.key === 's' || e.key === 'S') nextScene();
@@ -356,7 +458,7 @@
   function scheduleIdle() {
     document.body.classList.remove('idle');
     clearTimeout(idleTimer);
-    if (!audio.paused) idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
+    if (isLive()) idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
   }
   window.addEventListener('pointermove', scheduleIdle);
 
@@ -399,7 +501,7 @@
   const follow = (cur, target, up, down, dt) => cur + (target - cur) * (1 - Math.exp(-(target > cur ? up : down) * dt));
 
   function analyse(t, dt) {
-    const live = analyser && !audio.paused;
+    const live = isLive();
     if (live) analyser.getByteFrequencyData(freqData);
 
     for (let i = 0; i < BARS; i++) {
@@ -607,7 +709,7 @@
   }
 
   function updateAndDrawVoronoi(t, dt) {
-    const live = analyser && !audio.paused;
+    const live = isLive();
     const h = hue + tone * 140;
     const maxDrift = cellSize * 0.5;
     const diag = Math.hypot(W, H);
@@ -756,7 +858,7 @@
   }
 
   function updateAndDrawRibbons(t, dt) {
-    const live = analyser && !audio.paused;
+    const live = isLive();
     const h = hue + tone * 140;
     // Plain blending for the strands: additive blending doubled their cost
     ctx.globalCompositeOperation = 'source-over';
@@ -870,7 +972,7 @@
   }
 
   function updateAndDrawFlow(t, dt) {
-    const live = analyser && !audio.paused;
+    const live = isLive();
     const h = hue + tone * 140;
 
     for (let i = vortices.length - 1; i >= 0; i--) {
@@ -1037,7 +1139,7 @@
   }
 
   function updateAndDrawDust(t, dt) {
-    const live = analyser && !audio.paused;
+    const live = isLive();
     const h = hue + tone * 140;
     refreshSprites(Math.round(h));
 
@@ -1304,7 +1406,7 @@
       ctx.drawImage(btrail, 0, 0, W, H);
       return;
     }
-    const live = analyser && !audio.paused;
+    const live = isLive();
     const h = hue + tone * 140;
     brownKick = Math.max(0, brownKick - dt * 1.5);
     const temp = 1 + mood.level * 2 + brownKick * 2;
@@ -1537,7 +1639,7 @@
 
   function updateAndDrawLife(t, dt) {
     if (!lifeRule) return;
-    const live = analyser && !audio.paused;
+    const live = isLive();
 
     // Louder music runs more generations per second. Hold still while the
     // pointer is down so cells can be drawn before they start evolving.
@@ -1821,6 +1923,9 @@
     }
     ctx.globalCompositeOperation = 'source-over';
   }
+
+  // Come back in the mode you last used
+  try { if (localStorage.getItem('mode') === 'listen') setMode('listen'); } catch {}
 
   // ---------- Main loop ----------
   let last = performance.now();

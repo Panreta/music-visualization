@@ -13,6 +13,9 @@ python3 -m http.server 8000
 
 ## Use
 
+- **Play or Listen:** the switch at the left of the control bar picks the mode.
+  - **Play** plays your own songs (below).
+  - **Listen** plays nothing itself; it follows sound from somewhere else, so you can use Spotify, YouTube or any other player. Press **Tab / screen** and pick a browser tab with **Share tab audio** turned on (for example Spotify's web player at open.spotify.com); on Windows you can share the entire screen with system audio to follow every app, including the Spotify desktop app. Or press **Microphone** to follow whatever the microphone hears. Works in Chrome and Edge; Safari cannot share tab audio, so use the microphone there. The sound is only measured, never recorded or saved, and **Stop** (or the browser's own Stop sharing bar) ends it. The page remembers which mode you used last.
 - **Load music:** press **Choose MP3**, or drag audio files onto the page (you can pick or drop several at once).
 - **Library:** every song you load is saved in your browser (IndexedDB), so it is still there next time you open the page. Press **Library** (or L) to see the list with each song's length and play count; click a song to play it, or the × to remove it. When a song ends, the next one in the library plays. Nothing is uploaded: the library lives only in the browser you used.
 - **Ripples:** click anywhere on the screen; drag to leave a trail of ripples.
