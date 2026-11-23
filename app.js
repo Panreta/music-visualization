@@ -263,7 +263,6 @@
     track.addEventListener('ended', () => { if (listenStream === stream) stopListening(); });
     setListenStatus(kind === 'mic' ? 'Listening to the microphone' : 'Listening to the shared tab or screen', true);
     hint.classList.add('gone');
-    pickRandomScene();
     scheduleIdle();
   }
   tabBtn.addEventListener('click', (e) => { startListening('tab'); e.currentTarget.blur(); });
